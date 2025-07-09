@@ -1,70 +1,149 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/spf13/cobra"
 )
 
+var allFlag bool
+
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+)
+
+func info(msg string) {
+	fmt.Printf("%s📦 %s%s\n", colorCyan, msg, colorReset)
+}
+
+func warn(msg string) {
+	fmt.Printf("%s⚠️  %s%s\n", colorYellow, msg, colorReset)
+}
+
+func fail(msg string) {
+	fmt.Printf("%s❌ %s%s\n", colorRed, msg, colorReset)
+}
+
+func success(msg string) {
+	fmt.Printf("%s✅ %s%s\n", colorGreen, msg, colorReset)
+}
+
 var buildCmd = &cobra.Command{
-	Use:   "build [app-name]",
+	Use:   "build [app-name|group-name]",
 	Short: "Package one or more apps using IntuneWinAppUtil",
-	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		globalCfg, err := config.LoadGlobalConfig("inpakker.config.json")
 		if err != nil {
-			return fmt.Errorf("could not load global config: %w", err)
+			return fmt.Errorf("%w: %s", err, "🔧 could not load global config")
 		}
 
-		// Use AppsDir from global config, fallback to "apps"
 		appsRoot := globalCfg.AppsDir
 		if appsRoot == "" {
 			appsRoot = "apps"
 		}
 
-		// Use DefaultOutputDir from global config, fallback to "output"
 		defaultOutputDir := globalCfg.DefaultOutputDir
 		if defaultOutputDir == "" {
 			defaultOutputDir = "output"
 		}
 
-		for _, appName := range args {
-			appPath := filepath.Join(appsRoot, appName)
-			cfgPath := filepath.Join(appPath, "app.config.json")
+		var targets []string
 
+		if allFlag {
+			info("Scanning for apps...")
+
+			err := filepath.Walk(appsRoot, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if info.IsDir() && strings.HasSuffix(path, ".git") {
+					return filepath.SkipDir
+				}
+				if info.Name() == "app.config.json" {
+					targets = append(targets, filepath.Dir(path))
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("failed scanning for apps: %w", err)
+			}
+
+			if len(targets) == 0 {
+				return errors.New("no app.config.json files found under apps directory")
+			}
+		} else if len(args) == 0 {
+			return errors.New("please provide an app/group name or use --all")
+		} else {
+			for _, name := range args {
+				candidate := filepath.Join(appsRoot, name)
+				info, err := os.Stat(candidate)
+				if err != nil {
+					warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
+					continue
+				}
+
+				if info.IsDir() {
+					cfgFile := filepath.Join(candidate, "app.config.json")
+					if _, err := os.Stat(cfgFile); err == nil {
+						targets = append(targets, candidate)
+					} else {
+						entries, _ := os.ReadDir(candidate)
+						for _, sub := range entries {
+							if sub.IsDir() {
+								subCfg := filepath.Join(candidate, sub.Name(), "app.config.json")
+								if _, err := os.Stat(subCfg); err == nil {
+									targets = append(targets, filepath.Join(candidate, sub.Name()))
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if len(targets) == 0 {
+			return errors.New("no valid apps found to build")
+		}
+
+		intuneUtilPath := globalCfg.IntuneWinAppUtil
+		if intuneUtilPath == "" {
+			intuneUtilPath = globalCfg.IntuneWinAppUtilPath
+		}
+		if intuneUtilPath == "" {
+			return errors.New("intunewinapputil path not configured in global config")
+		}
+
+		for _, appPath := range targets {
+			cfgPath := filepath.Join(appPath, "app.config.json")
 			appCfg, err := config.LoadAppConfig(cfgPath)
 			if err != nil {
-				fmt.Printf("Skipping %s: %v\n", appName, err)
+				warn(fmt.Sprintf("Skipping %s: %v", appPath, err))
 				continue
 			}
 
-			// If appCfg.OutputDir empty, use global defaultOutputDir
 			outputDir := appCfg.OutputDir
 			if outputDir == "" {
 				outputDir = defaultOutputDir
 			}
-
 			outputPath := filepath.Join(appPath, outputDir)
-			err = os.MkdirAll(outputPath, os.ModePerm)
-			if err != nil {
-				fmt.Printf("Could not create output folder %s: %v\n", outputPath, err)
+
+			if err := os.MkdirAll(outputPath, os.ModePerm); err != nil {
+				fail(fmt.Sprintf("Could not create output folder %s: %v", outputPath, err))
 				continue
 			}
 
-			fmt.Printf("Building app: %s\n", appCfg.Name)
-
-			intuneUtilPath := globalCfg.IntuneWinAppUtil
-			if intuneUtilPath == "" {
-				intuneUtilPath = globalCfg.IntuneWinAppUtilPath
-			}
-			if intuneUtilPath == "" {
-				fmt.Println("IntuneWinAppUtil path not configured")
-				continue
-			}
+			info(fmt.Sprintf("🛠️  Building %s...", appCfg.Name))
 
 			cmdExec := exec.Command(
 				intuneUtilPath,
@@ -73,17 +152,23 @@ var buildCmd = &cobra.Command{
 				"-o", outputPath,
 				"-q",
 			)
-			cmdExec.Stdout = os.Stdout
-			cmdExec.Stderr = os.Stderr
+			if !globalCfg.MuteIntuneWinAppUtil {
+				cmdExec.Stdout = os.Stdout
+				cmdExec.Stderr = os.Stderr
+			}
 			err = cmdExec.Run()
 			if err != nil {
-				fmt.Printf("Build failed for %s: %v\n", appCfg.Name, err)
+				fail(fmt.Sprintf("Build failed for %s: %v", appCfg.Name, err))
+			} else {
+				success(fmt.Sprintf("Build complete: %s", appCfg.Name))
 			}
 		}
+
 		return nil
 	},
 }
 
 func init() {
+	buildCmd.Flags().BoolVar(&allFlag, "all", false, "Build all apps under the apps directory")
 	rootCmd.AddCommand(buildCmd)
 }
