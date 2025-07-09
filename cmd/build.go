@@ -111,7 +111,6 @@ var buildCmd = &cobra.Command{
 				outputDir = defaultOutputDir
 			}
 			outputPath := filepath.Join(appPath, outputDir)
-			logger.Debug(fmt.Sprintf("Output folder: %s", outputPath))
 
 			currentHash, err := hashutil.ComputeAppHash(appPath, appCfg)
 			if err != nil {
