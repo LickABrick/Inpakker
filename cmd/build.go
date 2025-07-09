@@ -148,7 +148,7 @@ var buildCmd = &cobra.Command{
 			} else {
 				logger.Info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
 			}
-
+			// TODO: If .msi is a invalid MSI file (e.g. .pdf renamed to .msi), this will fail but error check doesn't catch it.
 			cmdExec := exec.Command(
 				intuneUtilPath,
 				"-c", filepath.Join(appPath, appCfg.Source),
