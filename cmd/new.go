@@ -14,7 +14,7 @@ var newCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		appName := args[0]
-		appDir := filepath.Join("apps", appName)
+		appDir := filepath.Join("apps", filepath.Clean(appName))
 
 		if err := os.MkdirAll(filepath.Join(appDir, "source"), os.ModePerm); err != nil {
 			return err

@@ -14,31 +14,6 @@ import (
 
 var allFlag bool
 
-const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorBlue   = "\033[34m"
-	colorCyan   = "\033[36m"
-)
-
-func info(msg string) {
-	fmt.Printf("%s📦 %s%s\n", colorCyan, msg, colorReset)
-}
-
-func warn(msg string) {
-	fmt.Printf("%s⚠️  %s%s\n", colorYellow, msg, colorReset)
-}
-
-func fail(msg string) {
-	fmt.Printf("%s❌ %s%s\n", colorRed, msg, colorReset)
-}
-
-func success(msg string) {
-	fmt.Printf("%s✅ %s%s\n", colorGreen, msg, colorReset)
-}
-
 var buildCmd = &cobra.Command{
 	Use:   "build [app-name|group-name]",
 	Short: "Package one or more apps using IntuneWinAppUtil",
@@ -143,7 +118,22 @@ var buildCmd = &cobra.Command{
 				continue
 			}
 
-			info(fmt.Sprintf("🛠️  Building %s...", appCfg.Name))
+			// Determine group if any by trimming appsRoot and splitting
+			relPath, err := filepath.Rel(appsRoot, appPath)
+			if err != nil {
+				relPath = appPath
+			}
+			parts := strings.Split(relPath, string(filepath.Separator))
+			group := ""
+			if len(parts) > 1 {
+				group = parts[0]
+			}
+
+			if group != "" {
+				info(fmt.Sprintf("🛠️  Building app: %s (group: %s%s%s)", appCfg.Name, colorBlue, group, colorReset))
+			} else {
+				info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
+			}
 
 			cmdExec := exec.Command(
 				intuneUtilPath,
