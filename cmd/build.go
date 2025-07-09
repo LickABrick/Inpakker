@@ -7,8 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
+	"github.com/LickABrick/inpakker/internal/logger"
 	"github.com/LickABrick/inpakker/internal/config"
+	"github.com/LickABrick/inpakker/internal/hashutil"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,6 @@ var buildCmd = &cobra.Command{
 		if appsRoot == "" {
 			appsRoot = "apps"
 		}
-
 		defaultOutputDir := globalCfg.DefaultOutputDir
 		if defaultOutputDir == "" {
 			defaultOutputDir = "output"
@@ -36,8 +36,6 @@ var buildCmd = &cobra.Command{
 		var targets []string
 
 		if allFlag {
-			info("Scanning for apps...")
-
 			err := filepath.Walk(appsRoot, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
@@ -53,10 +51,6 @@ var buildCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed scanning for apps: %w", err)
 			}
-
-			if len(targets) == 0 {
-				return errors.New("no app.config.json files found under apps directory")
-			}
 		} else if len(args) == 0 {
 			return errors.New("please provide an app/group name or use --all")
 		} else {
@@ -64,10 +58,9 @@ var buildCmd = &cobra.Command{
 				candidate := filepath.Join(appsRoot, name)
 				info, err := os.Stat(candidate)
 				if err != nil {
-					warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
+					logger.Warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
 					continue
 				}
-
 				if info.IsDir() {
 					cfgFile := filepath.Join(candidate, "app.config.json")
 					if _, err := os.Stat(cfgFile); err == nil {
@@ -99,40 +92,62 @@ var buildCmd = &cobra.Command{
 			return errors.New("intunewinapputil path not configured in global config")
 		}
 
+		// Load workspace cache
+		cachePath := filepath.Join(".", hashutil.CacheFile)
+		cache, _ := hashutil.LoadCache(cachePath)
+
+		changed := false
+
 		for _, appPath := range targets {
 			cfgPath := filepath.Join(appPath, "app.config.json")
 			appCfg, err := config.LoadAppConfig(cfgPath)
 			if err != nil {
-				warn(fmt.Sprintf("Skipping %s: %v", appPath, err))
+				logger.Warn(fmt.Sprintf("Skipping %s: %v", appPath, err))
 				continue
 			}
-
+			
 			outputDir := appCfg.OutputDir
 			if outputDir == "" {
 				outputDir = defaultOutputDir
 			}
 			outputPath := filepath.Join(appPath, outputDir)
+			logger.Debug(fmt.Sprintf("Output folder: %s", outputPath))
 
-			if err := os.MkdirAll(outputPath, os.ModePerm); err != nil {
-				fail(fmt.Sprintf("Could not create output folder %s: %v", outputPath, err))
+			currentHash, err := hashutil.ComputeAppHash(appPath, appCfg)
+			if err != nil {
+				logger.Warn(fmt.Sprintf("Skipping %s: failed to compute hash: %v", appPath, err))
 				continue
 			}
 
-			// Determine group if any by trimming appsRoot and splitting
-			relPath, err := filepath.Rel(appsRoot, appPath)
+			relAppPath, err := filepath.Rel(appsRoot, appPath)
 			if err != nil {
-				relPath = appPath
+				relAppPath = appPath
 			}
-			parts := strings.Split(relPath, string(filepath.Separator))
+
+			// Check cache
+			if entry, ok := cache.Apps[relAppPath]; ok && entry.Hash == currentHash {
+				entries, _ := os.ReadDir(outputPath)
+				if len(entries) > 0 {
+					logger.Info(fmt.Sprintf("✅ Skipping %s: no changes detected", appCfg.Name))
+					continue
+				}
+			}
+
+			if err := os.MkdirAll(outputPath, os.ModePerm); err != nil {
+				logger.Error(fmt.Sprintf("Could not create output folder %s: %v", outputPath, err))
+				continue
+			}
+
 			group := ""
+			parts := strings.Split(relAppPath, string(filepath.Separator))
 			if len(parts) > 1 {
 				group = parts[0]
 			}
 
 			if group != "" {
-				info(fmt.Sprintf("🛠️  Building app: %s (group: %s%s%s)", appCfg.Name, colorBlue, group, colorReset))
+				logger.Info(fmt.Sprintf("🛠️  Building app: %s (group: %s)", appCfg.Name, group))
 			} else {
-				info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
+				logger.Info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
 			}
 
 			cmdExec := exec.Command(
@@ -148,10 +163,18 @@ var buildCmd = &cobra.Command{
 			}
 			err = cmdExec.Run()
 			if err != nil {
-				fail(fmt.Sprintf("Build failed for %s: %v", appCfg.Name, err))
-			} else {
-				success(fmt.Sprintf("Build complete: %s", appCfg.Name))
+				logger.Error(fmt.Sprintf("Build failed for %s: %v", appCfg.Name, err))
+				continue
 			}
+
+			cache.Apps[relAppPath] = hashutil.CacheEntry{Hash: currentHash}
+			changed = true
+
+			logger.Success(fmt.Sprintf("Build complete: %s", appCfg.Name))
+		}
+
+		if changed {
+			_ = hashutil.SaveCache(cachePath, cache)
 		}
 
 		return nil

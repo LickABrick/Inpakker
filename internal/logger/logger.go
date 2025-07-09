@@ -1,4 +1,4 @@
-package cmd
+package logger
 
 import "fmt"
 
@@ -11,18 +11,22 @@ const (
 	colorBlue   = "\033[34m"
 )
 
-func info(msg string) {
+func Info(msg string) {
 	fmt.Printf("%sℹ️ %s%s\n", colorCyan, msg, colorReset)
 }
 
-func warn(msg string) {
-	fmt.Printf("%s⚠️  %s%s\n", colorYellow, msg, colorReset)
+func Warn(msg string) {
+	fmt.Printf("%s⚠️ %s%s\n", colorYellow, msg, colorReset)
 }
 
-func fail(msg string) {
+func Error(msg string) {
 	fmt.Printf("%s❌ %s%s\n", colorRed, msg, colorReset)
 }
 
-func success(msg string) {
+func Success(msg string) {
 	fmt.Printf("%s✅ %s%s\n", colorGreen, msg, colorReset)
+}
+
+func Debug(msg string) {
+	fmt.Printf("%s🐛 %s%s\n", colorBlue, msg, colorReset)
 }
