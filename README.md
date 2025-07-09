@@ -4,7 +4,7 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 
 ## Quick Start
 
-1. Download the latest Inpakker executable from the [releases page](#).
+1. Download the latest Inpakker executable from the [releases page](https://github.com/LickABrick/Inpakker/releases).
 
 2. Prepare your workspace folder structure:
 
