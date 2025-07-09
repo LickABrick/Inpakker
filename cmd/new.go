@@ -16,7 +16,7 @@ var newCmd = &cobra.Command{
 		appName := args[0]
 		appDir := filepath.Join("apps", appName)
 
-		if err := os.MkdirAll(filepath.Join(appDir, "SourceApp"), os.ModePerm); err != nil {
+		if err := os.MkdirAll(filepath.Join(appDir, "source"), os.ModePerm); err != nil {
 			return err
 		}
 
@@ -27,13 +27,13 @@ var newCmd = &cobra.Command{
 		defer f.Close()
 
 		const tmpl = `{
-  name: "{{.Name}}",
-  displayName: "{{.DisplayName}}",
-  source: "./SourceApp",
-  setupFile: "installer.msi",
-  installCommand: "installer.msi /quiet",
-  uninstallCommand: "msiexec /x {product-code} /quiet",
-  outputDir: "./output"
+  "name": "{{.Name}}",
+  "displayName": "{{.DisplayName}}",
+  "source": "./source",
+  "setupFile": "",
+  "installCommand": "",
+  "uninstallCommand": "",
+  "outputDir": "./output"
 }`
 
 		t := template.Must(template.New("app").Parse(tmpl))
