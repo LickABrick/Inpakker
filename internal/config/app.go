@@ -1,10 +1,9 @@
 package config
 
 import (
-	"os"
-
-	"github.com/yosuke-furukawa/json5/encoding/json5"
+	"encoding/json"
 	"github.com/LickABrick/inpakker/types"
+	"os"
 )
 
 func LoadAppConfig(path string) (*types.AppConfig, error) {
@@ -13,6 +12,6 @@ func LoadAppConfig(path string) (*types.AppConfig, error) {
 		return nil, err
 	}
 	var cfg types.AppConfig
-	err = json5.Unmarshal(data, &cfg)
+	err = json.Unmarshal(data, &cfg)
 	return &cfg, err
 }

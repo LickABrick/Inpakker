@@ -20,7 +20,7 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
-		f, err := os.Create(filepath.Join(appDir, "app.config.json5"))
+		f, err := os.Create(filepath.Join(appDir, "app.config.json"))
 		if err != nil {
 			return err
 		}

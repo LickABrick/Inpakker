@@ -23,7 +23,7 @@ var validateCmd = &cobra.Command{
 			if !entry.IsDir() {
 				continue
 			}
-			appPath := filepath.Join(root, entry.Name(), "app.config.json5")
+			appPath := filepath.Join(root, entry.Name(), "app.config.json")
 			_, err := config.LoadAppConfig(appPath)
 			if err != nil {
 				fmt.Printf("❌ %s: %v\n", entry.Name(), err)

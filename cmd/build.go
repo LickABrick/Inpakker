@@ -11,41 +11,71 @@ import (
 )
 
 var buildCmd = &cobra.Command{
-	Use:   "build [app-folder]",
+	Use:   "build [app-name]",
 	Short: "Package one or more apps using IntuneWinAppUtil",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		globalCfg, err := config.LoadGlobalConfig("inpakker.config.json5")
+		globalCfg, err := config.LoadGlobalConfig("inpakker.config.json")
 		if err != nil {
 			return fmt.Errorf("could not load global config: %w", err)
 		}
 
-		for _, appPath := range args {
-			cfgPath := filepath.Join(appPath, "app.config.json5")
+		// Use AppsDir from global config, fallback to "apps"
+		appsRoot := globalCfg.AppsDir
+		if appsRoot == "" {
+			appsRoot = "apps"
+		}
+
+		// Use DefaultOutputDir from global config, fallback to "output"
+		defaultOutputDir := globalCfg.DefaultOutputDir
+		if defaultOutputDir == "" {
+			defaultOutputDir = "output"
+		}
+
+		for _, appName := range args {
+			appPath := filepath.Join(appsRoot, appName)
+			cfgPath := filepath.Join(appPath, "app.config.json")
+
 			appCfg, err := config.LoadAppConfig(cfgPath)
 			if err != nil {
-				fmt.Printf("Skipping %s: %v\n", appPath, err)
+				fmt.Printf("Skipping %s: %v\n", appName, err)
 				continue
 			}
 
-			outputDir := filepath.Join(appPath, appCfg.OutputDir)
-			err = os.MkdirAll(outputDir, os.ModePerm)
+			// If appCfg.OutputDir empty, use global defaultOutputDir
+			outputDir := appCfg.OutputDir
+			if outputDir == "" {
+				outputDir = defaultOutputDir
+			}
+
+			outputPath := filepath.Join(appPath, outputDir)
+			err = os.MkdirAll(outputPath, os.ModePerm)
 			if err != nil {
-				fmt.Printf("Could not create output folder: %v\n", err)
+				fmt.Printf("Could not create output folder %s: %v\n", outputPath, err)
 				continue
 			}
 
 			fmt.Printf("Building app: %s\n", appCfg.Name)
 
-			cmd := exec.Command(
-				globalCfg.IntuneWinAppUtil,
+			intuneUtilPath := globalCfg.IntuneWinAppUtil
+			if intuneUtilPath == "" {
+				intuneUtilPath = globalCfg.IntuneWinAppUtilPath
+			}
+			if intuneUtilPath == "" {
+				fmt.Println("IntuneWinAppUtil path not configured")
+				continue
+			}
+
+			cmdExec := exec.Command(
+				intuneUtilPath,
 				"-c", filepath.Join(appPath, appCfg.Source),
 				"-s", appCfg.SetupFile,
-				"-o", outputDir,
+				"-o", outputPath,
+				"-q",
 			)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			err = cmd.Run()
+			cmdExec.Stdout = os.Stdout
+			cmdExec.Stderr = os.Stderr
+			err = cmdExec.Run()
 			if err != nil {
 				fmt.Printf("Build failed for %s: %v\n", appCfg.Name, err)
 			}

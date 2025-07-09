@@ -4,6 +4,7 @@ type GlobalConfig struct {
 	IntuneWinAppUtil string `json:"intunewinapputil"`
 	IntuneWinAppUtilPath string `json:"intuneWinAppUtilPath"`
 	DefaultOutputDir     string `json:"defaultOutputDir"`
+	AppsDir              string `json:"appsDir"`
 }
 
 type AppConfig struct {

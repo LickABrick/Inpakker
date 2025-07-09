@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/yosuke-furukawa/json5/encoding/json5"
-	"os"
+	"encoding/json"
 	"github.com/LickABrick/inpakker/types"
+	"os"
 )
 
 func LoadGlobalConfig(path string) (*types.GlobalConfig, error) {
@@ -12,6 +12,6 @@ func LoadGlobalConfig(path string) (*types.GlobalConfig, error) {
 		return nil, err
 	}
 	var cfg types.GlobalConfig
-	err = json5.Unmarshal(data, &cfg)
+	err = json.Unmarshal(data, &cfg)
 	return &cfg, err
 }
