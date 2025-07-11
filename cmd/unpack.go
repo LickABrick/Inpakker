@@ -14,13 +14,13 @@ import (
 	_ "embed"
 
 	"github.com/LickABrick/inpakker/internal/config"
-	"github.com/LickABrick/inpakker/internal/logger"
 	"github.com/spf13/cobra"
+	"github.com/charmbracelet/log"
 )
 
-var decodeCmd = &cobra.Command{
-	Use:   "decode [app-name|group-name|path-to-intunewin]",
-	Short: "Decode the .intunewin file for the specified app(s) using embedded decoder",
+var unpackCmd = &cobra.Command{
+	Use:   "unpack [app-name|group-name|path-to-intunewin]",
+	Short: "Unpack the .intunewin file for the specified app(s) using embedded decoder",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		globalCfg, err := config.LoadGlobalConfig("inpakker.config.json")
 		if err != nil {
@@ -61,11 +61,11 @@ var decodeCmd = &cobra.Command{
 					intunewinFile = filepath.Clean(intunewinFile)
 				}
 
-				logger.Info("Decoding .intunewin file.")
+				log.Info("Decoding .intunewin file.")
 
 				decodedDir := filepath.Join(filepath.Dir(intunewinFile), "decoded")
 				if err := os.MkdirAll(decodedDir, os.ModePerm); err != nil {
-					logger.Error(fmt.Sprintf("Failed to create decoded output folder: %v", err))
+					log.Error(fmt.Sprintf("Failed to create decoded output folder: %v", err))
 					continue
 				}
 
@@ -74,37 +74,37 @@ var decodeCmd = &cobra.Command{
 				cmdExec.Stderr = os.Stderr
 				err := cmdExec.Run()
 				if err != nil {
-					logger.Error(fmt.Sprintf("Decode failed for %s: %v", filepath.Base(intunewinFile), err))
+					log.Error(fmt.Sprintf("Unpacking failed for %s: %v", filepath.Base(intunewinFile), err))
 					continue
 				}
 
 				decodedZipPath := intunewinFile + ".decoded"
 				if _, err := os.Stat(decodedZipPath); err != nil {
-					logger.Error(fmt.Sprintf("Decoded zip not found for %s", filepath.Base(intunewinFile)))
+					log.Error(fmt.Sprintf("Decoded zip not found for %s", filepath.Base(intunewinFile)))
 					continue
 				}
 
 				err = unzip(decodedZipPath, decodedDir)
 				if err != nil {
-					logger.Error(fmt.Sprintf("Failed to unzip decoded content for %s: %v", filepath.Base(intunewinFile), err))
+					log.Error(fmt.Sprintf("Failed to unzip decoded content for %s: %v", filepath.Base(intunewinFile), err))
 					continue
 				}
 
 				os.Remove(decodedZipPath)
-				logger.Success(fmt.Sprintf("Decode complete for %s. Output at %s", filepath.Base(intunewinFile), decodedDir))
+				log.Info(fmt.Sprintf("✅ Unpack complete for %s. Output at %s", filepath.Base(intunewinFile), decodedDir))
 
 			} else {
 				// Treat argument as app/group name and find app(s)
 				targets := []string{}
 				candidate := filepath.Join(appsRoot, arg)
-				logger.Info(fmt.Sprintf("Scanning for app or group: %s", candidate))
+				log.Info(fmt.Sprintf("Scanning for app or group: %s", candidate))
 
 				infoMsg := fmt.Sprintf("Looking for apps under %s...", candidate)
-				logger.Info(infoMsg)
+				log.Info(infoMsg)
 
 				fileInfo, err := os.Stat(candidate)
 				if err != nil {
-					logger.Warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
+					log.Warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
 					continue
 				}
 
@@ -126,7 +126,7 @@ var decodeCmd = &cobra.Command{
 				}
 
 				if len(targets) == 0 {
-					logger.Warn(fmt.Sprintf("No valid apps found to decode for %s", arg))
+					log.Warn(fmt.Sprintf("No valid apps found to unpack for %s", arg))
 					continue
 				}
 
@@ -134,7 +134,7 @@ var decodeCmd = &cobra.Command{
 					cfgPath := filepath.Join(appPath, "app.config.json")
 					appCfg, err := config.LoadAppConfig(cfgPath)
 					if err != nil {
-						logger.Warn(fmt.Sprintf("Skipping %s: failed to load app config: %v", appPath, err))
+						log.Warn(fmt.Sprintf("Skipping %s: failed to load app config: %v", appPath, err))
 						continue
 					}
 
@@ -146,41 +146,41 @@ var decodeCmd = &cobra.Command{
 
 					intunewinFile, err := findIntuneWinFile(outputPath)
 					if err != nil {
-						logger.Error(fmt.Sprintf("Decode failed for %s: %v", appCfg.Name, err))
+						log.Error(fmt.Sprintf("Unpack failed for %s: %v", appCfg.Name, err))
 						continue
 					}
 
 					decodedDir := filepath.Join(outputPath, "decoded")
 					if err := os.MkdirAll(decodedDir, os.ModePerm); err != nil {
-						logger.Error(fmt.Sprintf("Failed to create decoded output folder: %v", err))
+						log.Error(fmt.Sprintf("Failed to create decoded output folder: %v", err))
 						continue
 					}
 
-					logger.Error(fmt.Sprintf("Decoding %s for app %s...", filepath.Base(intunewinFile), appCfg.Name))
+					log.Info(fmt.Sprintf("Unpacking %s for app %s...", filepath.Base(intunewinFile), appCfg.Name))
 
 					cmdExec := exec.Command(decoderPath, intunewinFile, "/s")
 					cmdExec.Stdout = os.Stdout
 					cmdExec.Stderr = os.Stderr
 					err = cmdExec.Run()
 					if err != nil {
-						logger.Error(fmt.Sprintf("Decode failed for %s: %v", appCfg.Name, err))
+						log.Error(fmt.Sprintf("Decode failed for %s: %v", appCfg.Name, err))
 						continue
 					}
 
 					decodedZipPath := intunewinFile + ".decoded"
 					if _, err := os.Stat(decodedZipPath); err != nil {
-						logger.Error(fmt.Sprintf("Decoded zip not found for %s", appCfg.Name))
+						log.Error(fmt.Sprintf("Decoded zip not found for %s", appCfg.Name))
 						continue
 					}
 
 					err = unzip(decodedZipPath, decodedDir)
 					if err != nil {
-						logger.Error(fmt.Sprintf("Failed to unzip decoded content for %s: %v", appCfg.Name, err))
+						log.Error(fmt.Sprintf("Failed to unzip decoded content for %s: %v", appCfg.Name, err))
 						continue
 					}
 
 					os.Remove(decodedZipPath)
-					logger.Success(fmt.Sprintf("Decode complete for %s. Output at %s", appCfg.Name, decodedDir))
+					log.Info(fmt.Sprintf("✅ Unpack complete for %s. Output at %s", appCfg.Name, decodedDir))
 				}
 			}
 		}
@@ -190,7 +190,7 @@ var decodeCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(decodeCmd)
+	rootCmd.AddCommand(unpackCmd)
 }
 
 //go:embed assets/sandbox/IntuneWinAppUtilDecoder.exe
