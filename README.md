@@ -8,14 +8,22 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 
 2. Prepare your workspace folder structure:
 
-    ```shell
+    ```text
     workspace/
       ├─ inpakker.config.json
       └─ apps/
-      ├─ app1/
-      │   └─ app.config.json
-      └─ app2/
-      └─ app.config.json
+        ├─ app1/
+        │   └─ app.config.json
+        │   └─ source/
+        │       └─ setup.exe
+        │   └─ output/
+        │       └─ app1.intunewin        
+        └─ group1/
+          └─ app2/
+            └─ ...
+          └─ app3/
+            └─ ...
+        └─ app.config.json
     ```
 
 3. Edit the global and app configuration files as needed (see below).
@@ -23,7 +31,10 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 4. Open a terminal, navigate to your workspace folder, then run:
 
     ```bash
-    path/to/inpakker build app1 app2
+    inpakker.exe build app1            👈 to build a single app
+    inpakker.exe build group1          👈 to build all apps within a group
+    inpakker.exe build group1\app2     👈 to build a specific app withing a group
+    inpakker.exe build --all           👈 to build all apps
     ````
 
 *Note:* Replace `path/to/inpakker` with the path to the downloaded executable. On Windows, this might be `.\inpakker.exe`.
