@@ -7,9 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"github.com/LickABrick/inpakker/internal/logger"
+
 	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/LickABrick/inpakker/internal/hashutil"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +59,7 @@ var buildCmd = &cobra.Command{
 				candidate := filepath.Join(appsRoot, name)
 				info, err := os.Stat(candidate)
 				if err != nil {
-					logger.Warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
+					log.Warn(fmt.Sprintf("Invalid path: %s (%v)", candidate, err))
 					continue
 				}
 				if info.IsDir() {
@@ -102,10 +103,10 @@ var buildCmd = &cobra.Command{
 			cfgPath := filepath.Join(appPath, "app.config.json")
 			appCfg, err := config.LoadAppConfig(cfgPath)
 			if err != nil {
-				logger.Warn(fmt.Sprintf("Skipping %s: %v", appPath, err))
+				log.Warn(fmt.Sprintf("Skipping %s: %v", appPath, err))
 				continue
 			}
-			
+
 			outputDir := appCfg.OutputDir
 			if outputDir == "" {
 				outputDir = defaultOutputDir
@@ -114,7 +115,7 @@ var buildCmd = &cobra.Command{
 
 			currentHash, err := hashutil.ComputeAppHash(appPath, appCfg)
 			if err != nil {
-				logger.Warn(fmt.Sprintf("Skipping %s: failed to compute hash: %v", appPath, err))
+				log.Warn(fmt.Sprintf("Skipping %s: failed to compute hash: %v", appPath, err))
 				continue
 			}
 
@@ -127,13 +128,13 @@ var buildCmd = &cobra.Command{
 			if entry, ok := cache.Apps[relAppPath]; ok && entry.Hash == currentHash {
 				entries, _ := os.ReadDir(outputPath)
 				if len(entries) > 0 {
-					logger.Info(fmt.Sprintf("✅ Skipping %s: no changes detected", appCfg.Name))
+					log.Info(fmt.Sprintf("⏩ Skipping %s: no changes detected", appCfg.Name))
 					continue
 				}
 			}
 
 			if err := os.MkdirAll(outputPath, os.ModePerm); err != nil {
-				logger.Error(fmt.Sprintf("Could not create output folder %s: %v", outputPath, err))
+				log.Error(fmt.Sprintf("Could not create output folder %s: %v", outputPath, err))
 				continue
 			}
 
@@ -144,9 +145,9 @@ var buildCmd = &cobra.Command{
 			}
 
 			if group != "" {
-				logger.Info(fmt.Sprintf("🛠️  Building app: %s (group: %s)", appCfg.Name, group))
+				log.Info(fmt.Sprintf("🛠️  Building app: %s (group: %s)", appCfg.Name, group))
 			} else {
-				logger.Info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
+				log.Info(fmt.Sprintf("🛠️  Building app: %s", appCfg.Name))
 			}
 			// TODO: If .msi is a invalid MSI file (e.g. .pdf renamed to .msi), this will fail but error check doesn't catch it.
 			cmdExec := exec.Command(
@@ -162,14 +163,14 @@ var buildCmd = &cobra.Command{
 			}
 			err = cmdExec.Run()
 			if err != nil {
-				logger.Error(fmt.Sprintf("Build failed for %s: %v", appCfg.Name, err))
+				log.Error(fmt.Sprintf("Build failed for %s: %v", appCfg.Name, err))
 				continue
 			}
 
 			cache.Apps[relAppPath] = hashutil.CacheEntry{Hash: currentHash}
 			changed = true
 
-			logger.Success(fmt.Sprintf("Build complete: %s", appCfg.Name))
+			log.Info(fmt.Sprintf("✅ Build complete: %s", appCfg.Name))
 		}
 
 		if changed {
