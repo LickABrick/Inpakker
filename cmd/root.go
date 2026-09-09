@@ -20,6 +20,12 @@ var rootCmd = &cobra.Command{
 	Short:         "Package Win32 applications for Microsoft Intune",
 	SilenceErrors: true,
 	SilenceUsage:  true,
+	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+		automaticUpdateCheck(cmd)
+	},
+	PersistentPostRun: func(cmd *cobra.Command, _ []string) {
+		printAutomaticUpdateNotice(cmd)
+	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		input, inputOK := cmd.InOrStdin().(*os.File)
 		output, outputOK := cmd.OutOrStdout().(*os.File)
@@ -30,8 +36,11 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var currentVersion = "dev"
+
 // SetVersion configures the version reported by Cobra's --version flag.
 func SetVersion(version string) {
+	currentVersion = version
 	rootCmd.Version = version
 }
 

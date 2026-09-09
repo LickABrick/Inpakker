@@ -7,8 +7,10 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/spf13/cobra v1.9.1
 )
 

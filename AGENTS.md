@@ -27,18 +27,25 @@ terminal-aware presentation.
 - `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
 - `internal/unpacker/`: isolated external decoder execution and secure archive
   extraction.
+- `internal/updater/`: daily GitHub release discovery, cached update state,
+  signed checksum verification, archive validation, and rollback-aware
+  executable replacement.
 - `internal/process/`: injectable external-process runner.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
 - `internal/tui/`: Bubble Tea workspace interface; it composes the same services
   used by CLI commands.
 - `types/types.go`: JSON-backed global and application configuration types.
-- `README.md`: user-facing setup, workspace layout, and configuration reference.
+- `README.md`: concise end-user installation, features, and common workflows.
+- `docs/`: detailed end-user configuration and troubleshooting references.
+- `CONTRIBUTING.md` and `SECURITY.md`: public contribution and vulnerability
+  reporting guidance.
 
 Tests cover configuration validation, target discovery, command summaries,
 incremental builds, usage errors, onboarding, packaging failures, scaffold
-safety, decoder isolation, and ZIP extraction safety. There is no checked-in
-example workspace. GitHub Actions runs tests on Linux and Windows, and
-GoReleaser publishes tagged releases.
+safety, decoder isolation, ZIP extraction safety, update caching, release
+discovery, and signed update verification. There is no checked-in example
+workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
+publishes tagged releases.
 
 ## Git workflow
 
@@ -130,15 +137,19 @@ whose commits are not contained in `master`, are rejected.
 Release artifacts have stable, machine-readable names that include the project,
 version, operating system, and architecture, for example
 `inpakker_v1.2.3_windows_amd64.zip`. The supported release target is currently
-Windows AMD64. Publish a checksum manifest alongside the archives. Do not commit
-release binaries or archives to the repository.
+Windows AMD64. Publish a checksum manifest, its detached ECDSA signature, and a
+GitHub provenance attestation alongside the archives. The signing certificate
+in `internal/updater/release-signing-cert.pem` is public; its matching private
+key must exist only in secure maintainer storage and the encrypted
+`INPAKKER_RELEASE_SIGNING_KEY` GitHub Actions secret. Do not commit release
+binaries, archives, signatures, or private keys to the repository.
 
-Keep the release metadata suitable for a future in-app version check. Tags and
-GitHub Releases are the source of truth; avoid mutable version labels such as
-`latest` inside filenames. A future checker should compare semantic versions
-and should fail gracefully when GitHub is unreachable. Adding remote version
-checks is future work. The current CLI exposes the embedded release version
-through `inpakker --version`; development builds report `dev`.
+Tags and GitHub Releases are the update source of truth; avoid mutable version
+labels such as `latest` inside filenames. The updater accepts stable releases
+only and must require the versioned Windows archive, checksum manifest, and
+trusted manifest signature before installation. The CLI exposes the embedded
+release version through `inpakker --version`; development builds report `dev`
+and may not replace themselves.
 
 ## CLI behavior and workspace model
 
@@ -197,6 +208,13 @@ them:
   example unless `--no-example` is used. `doctor` performs read-only workspace
   checks. A missing config encountered during interactive TUI startup launches
   setup rather than returning an unassisted file error.
+- `update` works outside a workspace. `--check` never installs, `--yes` permits
+  non-interactive installation, and `--json` is check-only and never prompts.
+  The CLI and TUI share a per-user update cache and make at most one automatic
+  GitHub check per 24 hours. Ordinary check failures stay silent, automatic
+  checks never affect command success, and `INPAKKER_NO_UPDATE_CHECK=1` disables
+  them. Installation always re-fetches release metadata and verifies the signed
+  checksum before replacing the executable.
 
 When changing path or discovery behavior, cover absolute/relative paths,
 missing files, groups, nested apps, and platform-specific separators. Use
@@ -253,6 +271,13 @@ Intune utility, while ordinary Go development commands may remain portable.
 Keep this file descriptive of the repository's actual workflow. If new tests,
 CI, release tooling, or architectural layers are added, revise the relevant
 sections rather than leaving stale instructions.
+
+Keep the README focused on released end-user behavior. Put full configuration
+and troubleshooting material under `docs/`; put development and release details
+in `CONTRIBUTING.md` or this file. Do not expose dependency versions or internal
+implementation details in the README unless an end user must act on them.
+When the active version branch changes, update Dependabot's `target-branch` in
+the same pull request so dependency updates continue to follow this workflow.
 
 ## Maintaining this file
 
