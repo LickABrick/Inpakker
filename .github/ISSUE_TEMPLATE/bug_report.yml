@@ -1,0 +1,56 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Inpakker
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach proprietary packages, source files, credentials, tenant information, or sensitive logs. Security issues must be reported privately through the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: Inpakker version
+      description: Output from `inpakker --version`.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows and terminal version
+      placeholder: Windows 11 24H2, Windows Terminal 1.x
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Explain what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe sequence that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      description: Include the complete error and relevant `inpakker doctor` output after removing sensitive information.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tenant data, proprietary package contents, and other sensitive information.
+          required: true

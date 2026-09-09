@@ -8,6 +8,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/progress"
@@ -19,6 +20,7 @@ import (
 	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/unpacker"
+	"github.com/LickABrick/inpakker/internal/updater"
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
 
@@ -28,6 +30,7 @@ const (
 	listScreen screen = iota
 	detailScreen
 	createScreen
+	updateScreen
 	resultScreen
 )
 
@@ -46,9 +49,11 @@ func (i appItem) FilterValue() string {
 }
 
 type operationMsg struct {
-	title string
-	body  string
-	err   error
+	title          string
+	body           string
+	err            error
+	updatedVersion string
+	clearUpdate    bool
 }
 
 type refreshMsg struct {
@@ -66,10 +71,16 @@ type activityEvent struct {
 type activityMsg activityEvent
 type activityClosedMsg struct{}
 
+type updateCheckMsg struct {
+	result updater.Result
+}
+
 type Model struct {
 	ctx             context.Context
 	workspace       *workspace.Workspace
 	runner          process.Runner
+	updater         *updater.Service
+	updateResult    updater.Result
 	list            list.Model
 	apps            []workspace.App
 	screen          screen
@@ -81,6 +92,7 @@ type Model struct {
 	err             error
 	form            *huh.Form
 	create          *workspace.CreateOptions
+	updateConfirmed bool
 	spinner         spinner.Model
 	progress        progress.Model
 	activity        chan activityEvent
@@ -95,7 +107,7 @@ var (
 	helpStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
-func New(ctx context.Context, ws *workspace.Workspace, runner process.Runner) (Model, error) {
+func New(ctx context.Context, ws *workspace.Workspace, runner process.Runner, updateService *updater.Service) (Model, error) {
 	apps, err := ws.List()
 	if err != nil {
 		return Model{}, err
@@ -108,10 +120,15 @@ func New(ctx context.Context, ws *workspace.Workspace, runner process.Runner) (M
 	activity := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	activity.Style = headingStyle
 	bar := progress.New(progress.WithColors(lipgloss.Color("6")), progress.WithWidth(36))
-	return Model{ctx: ctx, workspace: ws, runner: runner, list: applicationList, apps: apps, spinner: activity, progress: bar}, nil
+	return Model{ctx: ctx, workspace: ws, runner: runner, updater: updateService, list: applicationList, apps: apps, spinner: activity, progress: bar}, nil
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	if m.updater == nil {
+		return nil
+	}
+	return m.checkUpdateCmd()
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -132,7 +149,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelActivity()
 		}
 		m.activity = nil
+		if msg.clearUpdate {
+			m.updateResult.Available = false
+			m.list.Title = "Inpakker workspace"
+		}
+		if msg.updatedVersion != "" {
+			m.updateResult.LatestVersion = msg.updatedVersion
+		}
 		m.title, m.body, m.err, m.screen = msg.title, msg.body, msg.err, resultScreen
+		return m, nil
+	case updateCheckMsg:
+		m.updateResult = msg.result
+		if msg.result.Available {
+			m.list.Title = "Inpakker workspace  •  Update v" + msg.result.LatestVersion + " available"
+		}
 		return m, nil
 	case activityMsg:
 		m.current = activityEvent(msg)
@@ -190,6 +220,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.startBuild(true)
 		case "u":
 			return m.startUnpack(false)
+		case "U":
+			if m.updateResult.Available {
+				return m, m.beginUpdate()
+			}
+			return m, nil
 		case "ctrl+u":
 			return m.startUnpack(true)
 		}
@@ -201,17 +236,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen, m.err = listScreen, nil
 			return m, m.refreshCmd()
 		}
-	case createScreen:
+	case createScreen, updateScreen:
 		return m.updateComponent(msg)
 	}
 	return m.updateComponent(msg)
 }
 
 func (m Model) updateComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.screen == createScreen {
+	if m.screen == createScreen || m.screen == updateScreen {
 		updated, cmd := m.form.Update(msg)
 		m.form = updated.(*huh.Form)
 		if m.form.State == huh.StateCompleted {
+			if m.screen == updateScreen {
+				if !m.updateConfirmed {
+					m.screen = listScreen
+					return m, cmd
+				}
+				m.busy = true
+				operationContext := m.startActivity(4)
+				return m, tea.Sequence(cmd, tea.Batch(m.spinner.Tick, m.waitForActivity(), m.updateCmd(operationContext)))
+			}
 			m.busy = true
 			return m, tea.Sequence(cmd, m.createCmd())
 		}
@@ -240,10 +284,14 @@ func (m Model) View() tea.View {
 			content += m.body + "\n"
 		}
 		content += "\n" + helpStyle.Render("enter/esc back  •  q quit")
-	case createScreen:
+	case createScreen, updateScreen:
 		content = m.form.View()
 	default:
-		content = m.list.View() + "\n" + helpStyle.Render("enter details  •  / search  •  n create  •  d doctor  •  v/b/u selected  •  ctrl+v/b/u all  •  r refresh  •  q quit")
+		help := "enter details  •  / search  •  n create  •  d doctor  •  v/b/u selected  •  ctrl+v/b/u all"
+		if m.updateResult.Available {
+			help += "  •  U update"
+		}
+		content = m.list.View() + "\n" + helpStyle.Render(help+"  •  r refresh  •  q quit")
 	}
 	if m.busy {
 		total := max(1, m.current.total)
@@ -479,6 +527,61 @@ func (m *Model) beginCreate() tea.Cmd {
 	)).WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
 	m.screen = createScreen
 	return m.form.Init()
+}
+
+func (m *Model) beginUpdate() tea.Cmd {
+	m.updateConfirmed = false
+	description := fmt.Sprintf("Current: v%s\nAvailable: v%s\n%s", m.updateResult.CurrentVersion, m.updateResult.LatestVersion, m.updateResult.ReleaseURL)
+	m.form = huh.NewForm(huh.NewGroup(
+		huh.NewNote().Title("Update Inpakker").Description(description),
+		huh.NewConfirm().Title("Download, verify, and install this update?").Affirmative("Install").Negative("Cancel").Value(&m.updateConfirmed),
+	)).WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
+	m.screen = updateScreen
+	return m.form.Init()
+}
+
+func (m Model) updateCmd(ctx context.Context) tea.Cmd {
+	service := m.updater
+	activity := m.activity
+	activityContext := m.activityContext
+	return func() tea.Msg {
+		defer close(activity)
+		result, err := service.Check(ctx, false)
+		if err != nil {
+			return operationMsg{title: "Update failed", err: err}
+		}
+		if !result.Available {
+			return operationMsg{title: "Inpakker is up to date", body: "No newer stable release is available.", clearUpdate: true}
+		}
+		emit := func(event updater.Event) {
+			select {
+			case activity <- activityEvent{current: event.Current, total: event.Total, phase: event.Phase}:
+			case <-activityContext.Done():
+			}
+		}
+		if err := service.Install(ctx, result, emit); err != nil {
+			return operationMsg{title: "Update failed", err: err}
+		}
+		return operationMsg{
+			title:          "Inpakker updated",
+			body:           "Updated to v" + result.LatestVersion + ".\n\nRestart Inpakker to use the new version.",
+			updatedVersion: result.LatestVersion,
+			clearUpdate:    true,
+		}
+	}
+}
+
+func (m Model) checkUpdateCmd() tea.Cmd {
+	service := m.updater
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 2*time.Second)
+		defer cancel()
+		result, err := service.Check(ctx, true)
+		if err != nil {
+			return updateCheckMsg{}
+		}
+		return updateCheckMsg{result: result}
+	}
 }
 
 func (m Model) createCmd() tea.Cmd {

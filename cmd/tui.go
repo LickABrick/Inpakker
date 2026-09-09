@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/LickABrick/inpakker/internal/process"
 	uiterm "github.com/LickABrick/inpakker/internal/tui"
+	"github.com/LickABrick/inpakker/internal/updater"
 	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -38,7 +39,11 @@ func runTUI(cmd *cobra.Command, runner process.Runner) error {
 	if err != nil {
 		return err
 	}
-	model, err := uiterm.New(cmd.Context(), ws, runner)
+	var updateService *updater.Service
+	if !updateChecksDisabled() {
+		updateService = newUpdateService(currentVersion)
+	}
+	model, err := uiterm.New(cmd.Context(), ws, runner, updateService)
 	if err != nil {
 		return err
 	}
