@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/LickABrick/inpakker/internal/cliui"
 	"github.com/LickABrick/inpakker/internal/packager"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/workspace"
@@ -11,22 +15,41 @@ import (
 )
 
 func newBuildCmd(runner process.Runner) *cobra.Command {
-	var all bool
+	var all, force, noCache, noInput bool
 	command := &cobra.Command{
 		Use:   "build [app-name|group-name...]",
 		Short: "Package one or more applications",
 		Args: func(cmd *cobra.Command, args []string) error {
-			return validateTargetArgs(args, all)
+			if all && len(args) > 0 {
+				return asUsage(errors.New("--all cannot be combined with named targets"))
+			}
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(cmd, runner, args, all)
+			if !all && len(args) == 0 {
+				if !interactive(cmd) || noInput {
+					return asUsage(errors.New("provide an application or group name, or use --all"))
+				}
+				ws, err := workspace.Open(".")
+				if err != nil {
+					return err
+				}
+				args, err = promptApplications(cmd, ws, "Applications to build", true, false)
+				if err != nil {
+					return err
+				}
+			}
+			return runBuild(cmd, runner, args, all, packager.BuildOptions{Force: force, NoCache: noCache})
 		},
 	}
 	command.Flags().BoolVar(&all, "all", false, "Build every application in the workspace")
+	command.Flags().BoolVar(&force, "force", false, "Build even when inputs and output are unchanged")
+	command.Flags().BoolVar(&noCache, "no-cache", false, "Build without reading or writing the build cache")
+	command.Flags().BoolVar(&noInput, "no-input", false, "Disable interactive target selection")
 	return command
 }
 
-func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool) error {
+func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool, options packager.BuildOptions) error {
 	ws, err := workspace.Open(".")
 	if err != nil {
 		return err
@@ -44,30 +67,46 @@ func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool
 		return err
 	}
 	console := newConsole(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	console.start("Building", len(selection.Apps))
-	results := service.Build(cmd.Context(), selection.Apps, cmd.OutOrStdout(), cmd.ErrOrStderr())
-	succeeded, failed := 0, 0
+	var results []packager.Result
+	var buildErr error
+	if interactive(cmd) {
+		var toolOutput bytes.Buffer
+		value, progressErr := cliui.Run(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), "Building applications", len(selection.Apps), func(ctx context.Context, emit func(cliui.Event)) (any, error) {
+			options.OnProgress = func(event packager.Event) {
+				emit(cliui.Event{Current: event.Index - 1, Total: event.Total, Label: event.App, Phase: event.Phase})
+			}
+			return service.Build(ctx, selection.Apps, options, &toolOutput, &toolOutput)
+		})
+		if progressErr != nil && value == nil {
+			return progressErr
+		}
+		results, _ = value.([]packager.Result)
+		buildErr = progressErr
+		if strings.TrimSpace(toolOutput.String()) != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Tool output:\n%s\n", strings.TrimSpace(toolOutput.String()))
+		}
+	} else {
+		console.start("Building", len(selection.Apps))
+		results, buildErr = service.Build(cmd.Context(), selection.Apps, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	}
+	built, current, failed := 0, 0, 0
 	for _, result := range results {
 		if result.Err != nil {
 			failed++
 			console.failureDetail(result.App.Label(), result.Err)
+		} else if result.Status == packager.StatusCurrent {
+			current++
 		} else {
-			succeeded++
+			built++
+			console.successDetail(result.App.Label(), "built")
 		}
 	}
-	console.summary("Build finished", succeeded, failed, len(selection.Skipped))
+	console.buildSummary(built, current, failed, len(selection.Skipped))
+	if buildErr != nil {
+		return buildErr
+	}
 	if failed > 0 {
 		return reportedError{err: fmt.Errorf("%d %s failed", failed, plural(failed, "application", "applications"))}
-	}
-	return nil
-}
-
-func validateTargetArgs(args []string, all bool) error {
-	if all && len(args) > 0 {
-		return errors.New("--all cannot be combined with named targets")
-	}
-	if !all && len(args) == 0 {
-		return errors.New("provide an application or group name, or use --all")
 	}
 	return nil
 }

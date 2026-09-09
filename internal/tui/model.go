@@ -10,10 +10,13 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/LickABrick/inpakker/internal/packager"
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/unpacker"
 	"github.com/LickABrick/inpakker/internal/workspace"
@@ -53,21 +56,37 @@ type refreshMsg struct {
 	err  error
 }
 
+type activityEvent struct {
+	current int
+	total   int
+	label   string
+	phase   string
+}
+
+type activityMsg activityEvent
+type activityClosedMsg struct{}
+
 type Model struct {
-	ctx       context.Context
-	workspace *workspace.Workspace
-	runner    process.Runner
-	list      list.Model
-	apps      []workspace.App
-	screen    screen
-	busy      bool
-	width     int
-	height    int
-	title     string
-	body      string
-	err       error
-	inputs    []textinput.Model
-	focus     int
+	ctx             context.Context
+	workspace       *workspace.Workspace
+	runner          process.Runner
+	list            list.Model
+	apps            []workspace.App
+	screen          screen
+	busy            bool
+	width           int
+	height          int
+	title           string
+	body            string
+	err             error
+	form            *huh.Form
+	create          *workspace.CreateOptions
+	spinner         spinner.Model
+	progress        progress.Model
+	activity        chan activityEvent
+	current         activityEvent
+	activityContext context.Context
+	cancelActivity  context.CancelFunc
 }
 
 var (
@@ -86,7 +105,10 @@ func New(ctx context.Context, ws *workspace.Workspace, runner process.Runner) (M
 	applicationList.Title = "Inpakker workspace"
 	applicationList.SetStatusBarItemName("application", "applications")
 	applicationList.SetShowHelp(false)
-	return Model{ctx: ctx, workspace: ws, runner: runner, list: applicationList, apps: apps}, nil
+	activity := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	activity.Style = headingStyle
+	bar := progress.New(progress.WithColors(lipgloss.Color("6")), progress.WithWidth(36))
+	return Model{ctx: ctx, workspace: ws, runner: runner, list: applicationList, apps: apps, spinner: activity, progress: bar}, nil
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -106,8 +128,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.list.SetItems(toItems(msg.apps))
 	case operationMsg:
 		m.busy = false
+		if m.cancelActivity != nil {
+			m.cancelActivity()
+		}
+		m.activity = nil
 		m.title, m.body, m.err, m.screen = msg.title, msg.body, msg.err, resultScreen
 		return m, nil
+	case activityMsg:
+		m.current = activityEvent(msg)
+		return m, m.waitForActivity()
+	case activityClosedMsg:
+		return m, nil
+	}
+	if tick, ok := msg.(spinner.TickMsg); ok && m.busy {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(tick)
+		return m, cmd
 	}
 
 	key, isKey := msg.(tea.KeyPressMsg)
@@ -115,7 +151,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateComponent(msg)
 	}
 	if m.busy {
-		if key.String() == "ctrl+c" {
+		if key.String() == "ctrl+c" || key.String() == "q" {
+			if m.cancelActivity != nil {
+				m.cancelActivity()
+			}
 			return m, tea.Quit
 		}
 		return m, nil
@@ -135,11 +174,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "n":
-			m.beginCreate()
-			return m, nil
+			return m, m.beginCreate()
 		case "r":
 			m.busy = true
 			return m, m.refreshCmd()
+		case "d":
+			return m.startDoctor()
 		case "v":
 			return m.startValidate(false)
 		case "ctrl+v":
@@ -162,30 +202,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshCmd()
 		}
 	case createScreen:
-		switch key.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "esc":
-			m.screen = listScreen
-			return m, nil
-		case "tab", "down":
-			m.moveFocus(1)
-			return m, nil
-		case "shift+tab", "up":
-			m.moveFocus(-1)
-			return m, nil
-		case "ctrl+s":
-			m.busy = true
-			return m, m.createCmd()
-		}
+		return m.updateComponent(msg)
 	}
 	return m.updateComponent(msg)
 }
 
 func (m Model) updateComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.screen == createScreen {
-		var cmd tea.Cmd
-		m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
+		updated, cmd := m.form.Update(msg)
+		m.form = updated.(*huh.Form)
+		if m.form.State == huh.StateCompleted {
+			m.busy = true
+			return m, tea.Sequence(cmd, m.createCmd())
+		}
+		if m.form.State == huh.StateAborted {
+			m.screen = listScreen
+		}
 		return m, cmd
 	}
 	if m.screen == listScreen {
@@ -209,23 +241,36 @@ func (m Model) View() tea.View {
 		}
 		content += "\n" + helpStyle.Render("enter/esc back  •  q quit")
 	case createScreen:
-		labels := []string{"Name", "Group", "Display name", "Source directory", "Setup file", "Output directory"}
-		var builder strings.Builder
-		builder.WriteString(headingStyle.Render("Create application") + "\n\n")
-		for index := range m.inputs {
-			fmt.Fprintf(&builder, "%s\n%s\n\n", labels[index], m.inputs[index].View())
-		}
-		builder.WriteString(helpStyle.Render("tab/shift+tab fields  •  ctrl+s create  •  esc cancel"))
-		content = builder.String()
+		content = m.form.View()
 	default:
-		content = m.list.View() + "\n" + helpStyle.Render("enter details  •  / search  •  n create  •  v/b/u selected  •  ctrl+v/b/u all  •  r refresh  •  q quit")
+		content = m.list.View() + "\n" + helpStyle.Render("enter details  •  / search  •  n create  •  d doctor  •  v/b/u selected  •  ctrl+v/b/u all  •  r refresh  •  q quit")
 	}
 	if m.busy {
-		content += "\n\n" + headingStyle.Render("Working…")
+		total := max(1, m.current.total)
+		content += "\n\n" + m.progress.ViewAs(float64(m.current.current)/float64(total)) +
+			fmt.Sprintf("  %d/%d\n", m.current.current, m.current.total) +
+			m.spinner.View() + " " + m.current.phase + " " + m.current.label +
+			"\n" + helpStyle.Render("ctrl+c cancel")
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
 	return view
+}
+
+func (m Model) startDoctor() (tea.Model, tea.Cmd) {
+	checks := workspace.Diagnose(m.workspace.Root)
+	lines := make([]string, 0, len(checks))
+	for _, check := range checks {
+		marker := "✓"
+		if check.Status == workspace.CheckWarning {
+			marker = "!"
+		} else if check.Status == workspace.CheckFailure {
+			marker = "X"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s: %s", marker, check.Name, check.Detail))
+	}
+	m.title, m.body, m.err, m.screen = "Workspace doctor", strings.Join(lines, "\n"), nil, resultScreen
+	return m, nil
 }
 
 func (m Model) selected() (workspace.App, bool) {
@@ -254,10 +299,18 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.busy = true
-	return m, func() tea.Msg {
+	operationContext := m.startActivity(len(targets))
+	work := func() tea.Msg {
+		defer close(m.activity)
 		valid := 0
 		var issues []string
-		for _, target := range targets {
+		for index, target := range targets {
+			m.emitActivity(activityEvent{current: index, total: len(targets), label: target.Label(), phase: "validating"})
+			select {
+			case <-operationContext.Done():
+				return operationMsg{title: "Validation cancelled", err: operationContext.Err()}
+			default:
+			}
 			app := m.workspace.Inspect(target.Ref)
 			if app.Status == "valid" {
 				valid++
@@ -271,6 +324,7 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 		}
 		return operationMsg{title: "Validation finished", body: body}
 	}
+	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
 }
 
 func (m Model) startBuild(all bool) (tea.Model, tea.Cmd) {
@@ -289,24 +343,34 @@ func (m Model) startBuild(all bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.busy = true
-	return m, func() tea.Msg {
+	operationContext := m.startActivity(len(targets))
+	work := func() tea.Msg {
+		defer close(m.activity)
 		var output bytes.Buffer
-		results := service.Build(m.ctx, refs, &output, &output)
+		results, buildErr := service.Build(operationContext, refs, packager.BuildOptions{OnProgress: func(event packager.Event) {
+			m.emitActivity(activityEvent{current: event.Index - 1, total: event.Total, label: event.App, phase: event.Phase})
+		}}, &output, &output)
+		built, current := 0, 0
 		var failures []string
 		for _, result := range results {
 			if result.Err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", result.App.Label(), result.Err))
+			} else if result.Status == packager.StatusCurrent {
+				current++
+			} else {
+				built++
 			}
 		}
-		body := fmt.Sprintf("%d succeeded, %d failed", len(results)-len(failures), len(failures))
+		body := fmt.Sprintf("%d built, %d up to date, %d failed", built, current, len(failures))
 		if len(failures) > 0 {
 			body += "\n\n" + strings.Join(failures, "\n")
 		}
 		if strings.TrimSpace(output.String()) != "" {
 			body += "\n\nTool output:\n" + strings.TrimSpace(output.String())
 		}
-		return operationMsg{title: "Build finished", body: body}
+		return operationMsg{title: "Build finished", body: body, err: buildErr}
 	}
+	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
 }
 
 func (m Model) startUnpack(all bool) (tea.Model, tea.Cmd) {
@@ -321,9 +385,12 @@ func (m Model) startUnpack(all bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.busy = true
-	return m, func() tea.Msg {
+	operationContext := m.startActivity(len(targets))
+	work := func() tea.Msg {
+		defer close(m.activity)
 		var failures, outputs []string
-		for _, app := range targets {
+		for index, app := range targets {
+			m.emitActivity(activityEvent{current: index, total: len(targets), label: app.Label(), phase: "decoding"})
 			if len(app.Packages) != 1 {
 				problem := "no .intunewin package found"
 				if len(app.Packages) > 1 {
@@ -332,7 +399,7 @@ func (m Model) startUnpack(all bool) (tea.Model, tea.Cmd) {
 				failures = append(failures, app.Label()+": "+problem)
 				continue
 			}
-			result := service.Unpack(m.ctx, app.Packages[0], "", false, io.Discard, io.Discard)
+			result := service.Unpack(operationContext, app.Packages[0], "", false, io.Discard, io.Discard)
 			if result.Err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", app.Label(), result.Err))
 			} else {
@@ -348,40 +415,74 @@ func (m Model) startUnpack(all bool) (tea.Model, tea.Cmd) {
 		}
 		return operationMsg{title: "Unpack finished", body: body}
 	}
+	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
 }
 
-func (m *Model) beginCreate() {
-	placeholders := []string{"example", "optional/team", "Example application", "source", "setup.exe", m.workspace.DefaultOutputDir()}
-	m.inputs = make([]textinput.Model, len(placeholders))
-	for index, placeholder := range placeholders {
-		input := textinput.New()
-		input.Prompt = "> "
-		input.Placeholder = placeholder
-		input.SetWidth(max(20, m.width-6))
-		m.inputs[index] = input
+func (m *Model) startActivity(total int) context.Context {
+	m.activityContext, m.cancelActivity = context.WithCancel(m.ctx)
+	m.activity = make(chan activityEvent)
+	m.current = activityEvent{total: total, phase: "starting"}
+	return m.activityContext
+}
+
+func (m Model) emitActivity(event activityEvent) {
+	select {
+	case m.activity <- event:
+	case <-m.activityContext.Done():
 	}
-	m.inputs[3].SetValue("source")
-	m.inputs[5].SetValue(m.workspace.DefaultOutputDir())
-	m.focus = 0
-	m.inputs[0].Focus()
-	m.screen = createScreen
 }
 
-func (m *Model) moveFocus(delta int) {
-	m.inputs[m.focus].Blur()
-	m.focus = (m.focus + delta + len(m.inputs)) % len(m.inputs)
-	m.inputs[m.focus].Focus()
+func (m Model) waitForActivity() tea.Cmd {
+	activity := m.activity
+	return func() tea.Msg {
+		if activity == nil {
+			return activityClosedMsg{}
+		}
+		event, ok := <-activity
+		if !ok {
+			return activityClosedMsg{}
+		}
+		return activityMsg(event)
+	}
+}
+
+func (m *Model) beginCreate() tea.Cmd {
+	m.create = &workspace.CreateOptions{Source: "source", OutputDir: m.workspace.DefaultOutputDir()}
+	m.form = huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Application name").Value(&m.create.Name).Validate(func(value string) error {
+			if !workspace.ValidAppName(value) {
+				return errors.New("use a valid Windows directory name")
+			}
+			return nil
+		}),
+		huh.NewInput().Title("Group").Description("Optional path below the applications directory").Value(&m.create.Group).Validate(func(value string) error {
+			if !workspace.ValidGroupName(value) {
+				return errors.New("use a relative path of valid Windows directory names")
+			}
+			return nil
+		}),
+		huh.NewInput().Title("Display name").Value(&m.create.DisplayName),
+		huh.NewInput().Title("Source directory").Value(&m.create.Source).Validate(tuiSafePath),
+		huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(func(value string) error {
+			if strings.TrimSpace(value) == "" {
+				return errors.New("setup file is required")
+			}
+			return tuiSafePath(value)
+		}),
+		huh.NewInput().Title("Output directory").Value(&m.create.OutputDir).Validate(tuiSafePath),
+		huh.NewConfirm().Title("Create this application?").Affirmative("Create").Negative("Cancel").Validate(func(value bool) error {
+			if !value {
+				return errors.New("confirm creation or press esc to cancel")
+			}
+			return nil
+		}),
+	)).WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
+	m.screen = createScreen
+	return m.form.Init()
 }
 
 func (m Model) createCmd() tea.Cmd {
-	options := workspace.CreateOptions{
-		Name:        strings.TrimSpace(m.inputs[0].Value()),
-		Group:       strings.TrimSpace(m.inputs[1].Value()),
-		DisplayName: strings.TrimSpace(m.inputs[2].Value()),
-		Source:      strings.TrimSpace(m.inputs[3].Value()),
-		SetupFile:   strings.TrimSpace(m.inputs[4].Value()),
-		OutputDir:   strings.TrimSpace(m.inputs[5].Value()),
-	}
+	options := *m.create
 	return func() tea.Msg {
 		ref, err := m.workspace.Create(options)
 		if err != nil {
@@ -389,6 +490,13 @@ func (m Model) createCmd() tea.Cmd {
 		}
 		return operationMsg{title: "Application created", body: ref.Relative}
 	}
+}
+
+func tuiSafePath(value string) error {
+	if value == "" || !pathutil.IsSafeRelative(value) {
+		return errors.New("path must remain within the application directory")
+	}
+	return nil
 }
 
 func (m Model) refreshCmd() tea.Cmd {

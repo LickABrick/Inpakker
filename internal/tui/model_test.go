@@ -26,10 +26,10 @@ func TestNewSupportsAnEmptyWorkspaceAndGuidedCreate(t *testing.T) {
 	}
 
 	model.beginCreate()
-	model.inputs[0].SetValue("example")
-	model.inputs[1].SetValue("team")
-	model.inputs[2].SetValue("Example")
-	model.inputs[4].SetValue("setup.exe")
+	model.create.Name = "example"
+	model.create.Group = "team"
+	model.create.DisplayName = "Example"
+	model.create.SetupFile = "setup.exe"
 	message := model.createCmd()()
 	result, ok := message.(operationMsg)
 	if !ok || result.err != nil {

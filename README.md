@@ -9,26 +9,37 @@ to the separately installed `IntuneWinAppUtilDecoder.exe` project.
 
 1. Download the latest Inpakker executable from the [releases page](https://github.com/LickABrick/Inpakker/releases).
 
-2. Prepare your workspace folder structure:
+   Download Microsoft's
+   [Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool)
+   separately and note the full path to `IntuneWinAppUtil.exe`.
+
+2. Open Windows Terminal in the directory where you want the workspace and run:
+
+    ```powershell
+    inpakker setup
+    ```
+
+   The guided setup creates the global config, applications directory, and a
+   valid example containing a harmless `install.ps1`. Use `--no-input` and the
+   setup flags for unattended initialization.
+
+3. The resulting workspace looks like this:
 
     ```shell
     workspace/
       ├─ inpakker.config.json
       └─ apps/
-         ├─ app1/
-         │  ├─ app.config.json
-         │  └─ source/
-         │     └─ setup.exe
-         └─ app2/
-            └─ app.config.json
+         └─ example/
+            ├─ app.config.json
+            └─ source/
+               └─ install.ps1
     ```
 
-3. Edit the global and app configuration files as needed (see below).
+4. Check the workspace, then build the example:
 
-4. Open a terminal, navigate to your workspace folder, then run:
-
-    ```bash
-    path/to/inpakker build app1 app2
+    ```powershell
+    inpakker doctor
+    inpakker build example
     ```
 
    Run `inpakker` without arguments in an interactive terminal to open the TUI.
@@ -109,6 +120,28 @@ to the separately installed `IntuneWinAppUtilDecoder.exe` project.
 
 ## Commands
 
+Initialize a workspace interactively:
+
+```powershell
+inpakker setup
+```
+
+For automation, all answers are also available as flags:
+
+```powershell
+inpakker setup C:\Packages `
+  --apps-dir apps `
+  --output-dir output `
+  --intune-util C:\Tools\IntuneWinAppUtil.exe `
+  --decoder C:\Tools\IntuneWinAppUtilDecoder.exe `
+  --no-input
+```
+
+Run `inpakker doctor` to check the config, directories, external tools, and
+application validity. `doctor --json` is suitable for automation. A missing
+decoder is a warning because unpacking is optional; a missing packaging utility
+is a failure.
+
 Create an application scaffold under the configured `appsDir`, optionally in a
 group:
 
@@ -117,8 +150,9 @@ inpakker new myapp
 inpakker new myapp --group browsers --display-name "My App" --setup-file setup.exe
 ```
 
-The command refuses to overwrite an existing `app.config.json`. Add the setup
-file and set `setupFile` before validating or building the app.
+In an interactive terminal, `new` opens a guided Huh form and uses supplied
+arguments and flags as defaults. `--no-input` disables prompts. The command
+refuses to overwrite an existing `app.config.json`.
 
 Validate every app recursively under `appsDir`:
 
@@ -135,11 +169,19 @@ Build named apps or immediate app groups, or build the complete workspace:
 ```shell
 inpakker build app1 app2
 inpakker build --all
+inpakker build --all --force
+inpakker build --all --no-cache
 ```
 
-Build output reports individual failures and one final summary instead of one
-status line per successful or skipped app. Any packaging failure causes a
-non-zero exit status.
+Builds fingerprint the app configuration, source filenames and contents, and
+packaging-tool identity. If those inputs match the versioned
+`.inpakker-cache.json` entry and its recorded package still exists, the app is
+reported as up to date. `--force` rebuilds and refreshes the cache;
+`--no-cache` neither reads nor writes it. Cache entries are written only after a
+successful build produces at least one `.intunewin` file.
+
+Interactive builds and unpacks show an animated spinner and an overall progress
+bar. Redirected/non-interactive output remains stable and line-oriented.
 
 List applications or show one application's details:
 
@@ -179,13 +221,20 @@ the resulting ZIP archive.
 
 Run `inpakker` with no arguments, or run `inpakker tui`, to open the terminal
 interface. It provides fuzzy search, application status and details, guided app
-creation, refresh, and validate/build/unpack actions for either the selected app
-or the complete workspace. Its key hints are shown at the bottom of each view.
+creation, workspace diagnostics, refresh, and validate/build/unpack actions for
+either the selected app or the complete workspace. Its key hints are shown at
+the bottom of each view. Starting it outside a workspace launches guided setup.
 
 Every TUI operation has a CLI equivalent: `list`, `show`, `new`, `validate`,
 `build`, and `unpack`. Destructive workspace operations and raw configuration
 editing are intentionally not included; use a version-controlled editor for
 those tasks.
+
+Interactive prompts can be disabled with `--no-input` on commands that offer a
+guided form or target selector.
+Set `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` to use Huh's screen-reader-friendly
+prompt mode. Styling automatically adapts to terminal color support and
+redirected output.
 
 ## Version
 
@@ -199,7 +248,7 @@ Local development builds report `dev`. Tagged releases use Semantic Versioning
 and are published on GitHub with a Windows AMD64 ZIP and a SHA-256 checksum
 manifest.
 
-Building v0.2 and later from source requires Go 1.25 or newer.
+Building v0.2 and later from source requires Go 1.25.8 or newer.
 
 ## Releasing
 

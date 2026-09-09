@@ -14,7 +14,7 @@ func newValidateCmd() *cobra.Command {
 		Short: "Validate applications in the workspace",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 0 {
-				return fmt.Errorf("--all cannot be combined with named targets")
+				return asUsage(fmt.Errorf("--all cannot be combined with named targets"))
 			}
 			return nil
 		},

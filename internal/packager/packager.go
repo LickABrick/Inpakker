@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/LickABrick/inpakker/internal/buildcache"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
@@ -18,9 +19,33 @@ type Service struct {
 	Runner    process.Runner
 }
 
+type ResultStatus string
+
+const (
+	StatusBuilt   ResultStatus = "built"
+	StatusCurrent ResultStatus = "current"
+	StatusFailed  ResultStatus = "failed"
+)
+
 type Result struct {
-	App workspace.App
-	Err error
+	App       workspace.App
+	Status    ResultStatus
+	Reason    string
+	Artifacts []string
+	Err       error
+}
+
+type Event struct {
+	Index int
+	Total int
+	App   string
+	Phase string
+}
+
+type BuildOptions struct {
+	Force      bool
+	NoCache    bool
+	OnProgress func(Event)
 }
 
 func (s Service) Validate() error {
@@ -37,38 +62,91 @@ func (s Service) Validate() error {
 	return workspace.EnsureFile(path, "intunewinapputil")
 }
 
-func (s Service) Build(ctx context.Context, refs []workspace.AppRef, stdout, stderr io.Writer) []Result {
+func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options BuildOptions, stdout, stderr io.Writer) ([]Result, error) {
+	var cache *buildcache.Cache
+	var err error
+	if !options.NoCache {
+		cache, err = buildcache.Load(s.Workspace.Root)
+		if err != nil {
+			return nil, err
+		}
+	}
 	results := make([]Result, 0, len(refs))
-	for _, ref := range refs {
+	for index, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		app := s.Workspace.Inspect(ref)
 		result := Result{App: app}
+		emit(options, Event{Index: index + 1, Total: len(refs), App: app.Label(), Phase: "checking"})
 		if app.Status != "valid" {
-			result.Err = errors.New(app.Error)
+			result.Status, result.Err = StatusFailed, errors.New(app.Error)
 			results = append(results, result)
 			continue
 		}
 		outputPath, err := s.Workspace.OutputDir(ref, app.Config)
-		if err == nil {
-			err = os.MkdirAll(outputPath, 0o755)
-		}
-		if err == nil {
-			var processOut, processErr io.Writer
-			if !s.Workspace.Config.MuteIntuneWinAppUtil {
-				processOut, processErr = stdout, stderr
-			}
-			err = s.Runner.Run(ctx, s.utilityPath(), []string{
-				"-c", filepath.Join(ref.Path, app.Config.Source),
-				"-s", app.Config.SetupFile,
-				"-o", outputPath,
-				"-q",
-			}, processOut, processErr)
-		}
 		if err != nil {
-			result.Err = fmt.Errorf("package application: %w", err)
+			result.Status, result.Err = StatusFailed, err
+			results = append(results, result)
+			continue
 		}
+		fingerprint, err := buildcache.Fingerprint(ref.Path, app.Config, outputPath, s.utilityPath())
+		if err != nil {
+			result.Status, result.Err = StatusFailed, err
+			results = append(results, result)
+			continue
+		}
+		cacheKey := filepath.ToSlash(ref.Relative)
+		if !options.Force && cache != nil && cache.Current(cacheKey, fingerprint, ref.Path) {
+			result.Status, result.Reason = StatusCurrent, "inputs and output are unchanged"
+			result.Artifacts = append([]string(nil), app.Packages...)
+			results = append(results, result)
+			continue
+		}
+		if err := os.MkdirAll(outputPath, 0o755); err != nil {
+			result.Status, result.Err = StatusFailed, fmt.Errorf("create output directory: %w", err)
+			results = append(results, result)
+			continue
+		}
+		emit(options, Event{Index: index + 1, Total: len(refs), App: app.Label(), Phase: "packaging"})
+		var processOut, processErr io.Writer
+		if !s.Workspace.Config.MuteIntuneWinAppUtil {
+			processOut, processErr = stdout, stderr
+		}
+		err = s.Runner.Run(ctx, s.utilityPath(), []string{
+			"-c", filepath.Join(ref.Path, app.Config.Source),
+			"-s", app.Config.SetupFile,
+			"-o", outputPath,
+			"-q",
+		}, processOut, processErr)
+		if err != nil {
+			result.Status, result.Err = StatusFailed, fmt.Errorf("package application: %w", err)
+			results = append(results, result)
+			continue
+		}
+		artifacts, err := s.Workspace.Packages(ref, app.Config)
+		if err != nil {
+			result.Status, result.Err = StatusFailed, fmt.Errorf("inspect build output: %w", err)
+			results = append(results, result)
+			continue
+		}
+		if len(artifacts) == 0 {
+			result.Status, result.Err = StatusFailed, errors.New("packaging utility completed without producing an .intunewin file")
+			results = append(results, result)
+			continue
+		}
+		result.Status, result.Artifacts = StatusBuilt, artifacts
 		results = append(results, result)
+		if cache != nil {
+			if err := cache.Set(cacheKey, fingerprint, ref.Path, artifacts); err != nil {
+				return results, err
+			}
+			if err := cache.Save(s.Workspace.Root); err != nil {
+				return results, err
+			}
+		}
 	}
-	return results
+	return results, nil
 }
 
 func (s Service) utilityPath() string {
@@ -76,4 +154,10 @@ func (s Service) utilityPath() string {
 		return s.Workspace.Config.IntuneWinAppUtil
 	}
 	return s.Workspace.Config.IntuneWinAppUtilPath
+}
+
+func emit(options BuildOptions, event Event) {
+	if options.OnProgress != nil {
+		options.OnProgress(event)
+	}
 }

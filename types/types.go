@@ -2,8 +2,8 @@ package types
 
 type GlobalConfig struct {
 	IntuneWinAppUtil     string `json:"intunewinapputil"`
-	IntuneWinAppUtilPath string `json:"intuneWinAppUtilPath"`
-	DecoderPath          string `json:"decoderPath"`
+	IntuneWinAppUtilPath string `json:"intuneWinAppUtilPath,omitempty"`
+	DecoderPath          string `json:"decoderPath,omitempty"`
 	DefaultOutputDir     string `json:"defaultOutputDir"`
 	AppsDir              string `json:"appsDir"`
 	MuteIntuneWinAppUtil bool   `json:"muteIntuneWinAppUtil"`
