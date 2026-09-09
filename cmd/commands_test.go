@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	workspace2 "github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/LickABrick/inpakker/types"
 )
 
@@ -22,45 +24,51 @@ type runnerCall struct {
 type fakeRunner struct {
 	err   error
 	calls []runnerCall
+	hook  func(name string, args []string) error
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args []string, _, _ io.Writer) error {
 	r.calls = append(r.calls, runnerCall{name: name, args: append([]string(nil), args...)})
+	if r.hook != nil {
+		return r.hook(name, args)
+	}
 	return r.err
 }
 
 func TestDiscoverTargetsRejectsTraversalAndDeduplicates(t *testing.T) {
 	root := t.TempDir()
-	writeApp(t, filepath.Join(root, "group", "one"), validApp("one"), true)
-	writeApp(t, filepath.Join(root, "group", "two"), validApp("two"), true)
+	writeApp(t, filepath.Join(root, "apps", "group", "one"), validApp("one"), true)
+	writeApp(t, filepath.Join(root, "apps", "group", "two"), validApp("two"), true)
+	ws := &workspace2.Workspace{Root: root}
 
-	targets, skipped, err := discoverTargets(root, []string{"group", "group/one", "../outside", "missing"}, false)
+	selection, err := ws.Discover([]string{"group", "group/one", "../outside", "missing"}, false)
 	if err != nil {
-		t.Fatalf("discoverTargets returned %v", err)
+		t.Fatalf("Discover returned %v", err)
 	}
-	if len(targets) != 2 {
-		t.Fatalf("got %d targets, want 2: %v", len(targets), targets)
+	if len(selection.Apps) != 2 {
+		t.Fatalf("got %d targets, want 2: %v", len(selection.Apps), selection.Apps)
 	}
-	if skipped != 2 {
-		t.Fatalf("got %d skipped targets, want 2", skipped)
+	if len(selection.Skipped) != 2 {
+		t.Fatalf("got %d skipped targets, want 2", len(selection.Skipped))
 	}
 }
 
 func TestDiscoverAllStopsAtApplicationRoot(t *testing.T) {
 	root := t.TempDir()
-	appDir := filepath.Join(root, "group", "one")
+	appDir := filepath.Join(root, "apps", "group", "one")
 	writeApp(t, appDir, validApp("one"), true)
 	writeJSON(t, filepath.Join(appDir, "source", "nested", "app.config.json"), validApp("nested"))
+	ws := &workspace2.Workspace{Root: root}
 
-	targets, skipped, err := discoverTargets(root, nil, true)
+	selection, err := ws.Discover(nil, true)
 	if err != nil {
-		t.Fatalf("discoverTargets returned %v", err)
+		t.Fatalf("Discover returned %v", err)
 	}
-	if len(targets) != 1 || targets[0] != appDir {
-		t.Fatalf("got targets %v, want only %s", targets, appDir)
+	if len(selection.Apps) != 1 || selection.Apps[0].Path != appDir {
+		t.Fatalf("got targets %v, want only %s", selection.Apps, appDir)
 	}
-	if skipped != 0 {
-		t.Fatalf("got %d skipped targets, want 0", skipped)
+	if len(selection.Skipped) != 0 {
+		t.Fatalf("got %d skipped targets, want 0", len(selection.Skipped))
 	}
 }
 
@@ -92,7 +100,7 @@ func TestBuildSummarizesResultsAndReturnsFailure(t *testing.T) {
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner called %d times, want 1", len(runner.calls))
 	}
-	if !containsSequence(runner.calls[0].args, "-o", filepath.Join("packages", "good", "artifacts")) {
+	if !containsSequence(runner.calls[0].args, "-o", filepath.Join(workspace, "packages", "good", "artifacts")) {
 		t.Fatalf("runner args do not contain configured output: %v", runner.calls[0].args)
 	}
 	for _, expected := range []string{"Building 2 applications", "1 succeeded", "1 failed", "1 skipped"} {
@@ -139,7 +147,7 @@ func TestNewUsesConfiguredAppsDirAndDoesNotOverwrite(t *testing.T) {
 	var stdout bytes.Buffer
 	command.SetOut(&stdout)
 
-	if err := runNew(command, "example"); err != nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "example"}); err != nil {
 		t.Fatalf("first runNew returned %v", err)
 	}
 	configPath := filepath.Join(workspace, "packages", "example", "app.config.json")
@@ -147,7 +155,7 @@ func TestNewUsesConfiguredAppsDirAndDoesNotOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read created config: %v", err)
 	}
-	if err := runNew(command, "example"); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "example"}); err == nil {
 		t.Fatal("second runNew returned nil")
 	}
 	after, err := os.ReadFile(configPath)
@@ -157,11 +165,14 @@ func TestNewUsesConfiguredAppsDirAndDoesNotOverwrite(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("existing config was modified")
 	}
-	if err := runNew(command, "../outside"); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "../outside"}); err == nil {
 		t.Fatal("runNew accepted a traversal path")
 	}
-	if err := runNew(command, "CON.txt"); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "CON.txt"}); err == nil {
 		t.Fatal("runNew accepted a reserved Windows directory name")
+	}
+	if err := runNew(command, workspace2.CreateOptions{Name: "escaped", Source: "../outside"}); err == nil {
+		t.Fatal("runNew accepted an escaping source path")
 	}
 }
 
@@ -187,6 +198,58 @@ func TestValidateFindsNestedAppsAndReturnsFailure(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "FAILED bad") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestUnpackApplicationUsesConfiguredDecoder(t *testing.T) {
+	workspace := enterWorkspace(t)
+	decoderPath := filepath.Join(workspace, "IntuneWinAppUtilDecoder.exe")
+	writeFile(t, decoderPath, "decoder")
+	writeGlobal(t, types.GlobalConfig{DecoderPath: decoderPath})
+	appDir := filepath.Join(workspace, "apps", "example")
+	writeApp(t, appDir, validApp("example"), true)
+	packagePath := filepath.Join(appDir, "output", "example.intunewin")
+	writeFile(t, packagePath, "package")
+
+	runner := &fakeRunner{hook: func(name string, args []string) error {
+		if name != decoderPath {
+			t.Fatalf("runner name = %q, want %q", name, decoderPath)
+		}
+		if len(args) != 2 || args[1] != "/s" {
+			t.Fatalf("runner args = %v, want staged package and /s", args)
+		}
+		archivePath := strings.TrimSuffix(args[0], filepath.Ext(args[0])) + ".decoded.zip"
+		file, err := os.Create(archivePath)
+		if err != nil {
+			return err
+		}
+		archive := zip.NewWriter(file)
+		entry, err := archive.Create("metadata.txt")
+		if err == nil {
+			_, err = entry.Write([]byte("decoded"))
+		}
+		if closeErr := archive.Close(); err == nil {
+			err = closeErr
+		}
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		return err
+	}}
+	command := newUnpackCmd(runner)
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"example"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("unpack returned %v; stderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1 succeeded") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	decoded := filepath.Join(appDir, "output", "decoded", "example", "metadata.txt")
+	if contents, err := os.ReadFile(decoded); err != nil || string(contents) != "decoded" {
+		t.Fatalf("decoded file contents = %q, error = %v", contents, err)
 	}
 }
 

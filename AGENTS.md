@@ -2,30 +2,38 @@
 
 ## Project overview
 
-Inpakker is a small Go CLI for organizing and packaging Win32 applications for
-Microsoft Intune. It wraps Microsoft's external `IntuneWinAppUtil.exe`; it does
-not implement the `.intunewin` packaging format itself.
+Inpakker is a small Go CLI and terminal UI for organizing and packaging Win32
+applications for Microsoft Intune. It wraps Microsoft's external
+`IntuneWinAppUtil.exe`; it does not implement the `.intunewin` packaging format
+itself.
 
 The Go module is `github.com/LickABrick/inpakker` and currently targets Go
-1.24.4. Cobra provides the CLI command structure.
+1.25.0. Cobra provides the CLI command structure. Bubble Tea, Bubbles, and Lip
+Gloss provide the interactive terminal UI and terminal-aware presentation.
 
 ## Repository map
 
 - `main.go`: executable entry point; delegates to `cmd.Execute`.
-- `cmd/root.go`: root Cobra command and process exit behavior.
-- `cmd/build.go`: target discovery and invocation of `IntuneWinAppUtil.exe`.
-- `cmd/new.go`: scaffolds a new application directory and config.
-- `cmd/validate.go`: recursively validates application configs and inputs.
+- `cmd/`: CLI commands, process exit behavior, and the TUI entry point. Keep
+  commands thin and call reusable internal services.
 - `cmd/output.go`: shared, terminal-aware command presentation.
 - `internal/config/`: JSON file loaders.
+- `internal/workspace/`: workspace discovery, inspection, validation, package
+  lookup, and application scaffolding.
+- `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
+- `internal/unpacker/`: isolated external decoder execution and secure archive
+  extraction.
+- `internal/process/`: injectable external-process runner.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
+- `internal/tui/`: Bubble Tea workspace interface; it composes the same services
+  used by CLI commands.
 - `types/types.go`: JSON-backed global and application configuration types.
 - `README.md`: user-facing setup, workspace layout, and configuration reference.
 
 Tests cover configuration validation, target discovery, command summaries,
-packaging failures, and scaffold safety. There is no checked-in example
-workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
-publishes tagged releases.
+packaging failures, scaffold safety, decoder isolation, and ZIP extraction
+safety. There is no checked-in example workspace. GitHub Actions runs tests on
+Linux and Windows, and GoReleaser publishes tagged releases.
 
 ## Git workflow
 
@@ -80,15 +88,15 @@ go build ./...
 
 Use `go test ./...` even while there are no explicit test files: it compiles all
 packages. Add focused unit tests for new parsing, validation, discovery, or path
-logic. Keep tests independent of an installed `IntuneWinAppUtil.exe`; inject or
-isolate process execution when testing build orchestration.
+logic. Keep tests independent of installed `IntuneWinAppUtil.exe` and
+`IntuneWinAppUtilDecoder.exe` binaries; inject or isolate process execution.
 
-The packaging integration can only be exercised where the configured Windows
-executable is available. Do not treat inability to run that external executable
-on Linux as a product failure. Do not commit generated Windows executables,
-`.intunewin` packages, coverage output, or local test workspaces; these are
-covered by `.gitignore`. A locally built extensionless Unix binary is not
-currently ignored, so take care not to stage one.
+The packaging and unpacking integrations can only be exercised where their
+configured Windows executables are available. Do not treat inability to run
+those external executables on Linux as a product failure. Do not commit
+generated Windows executables, `.intunewin` packages, decoded contents,
+coverage output, or local test workspaces. A locally built extensionless Unix
+binary is not currently ignored, so take care not to stage one.
 
 If the local Go toolchain itself is unavailable or broken, report that
 separately and do not claim the checks passed.
@@ -156,14 +164,24 @@ them:
   `intuneWinAppUtilPath` key is also accepted as a fallback.
 - `muteIntuneWinAppUtil` controls whether the wrapped tool inherits stdout and
   stderr.
-- `new` scaffolds under the configured `appsDir`, accepts a single directory
-  name, and must not overwrite an existing app config.
+- `decoderPath` points to a separately installed
+  `IntuneWinAppUtilDecoder.exe`; no decoder binary is embedded or distributed.
+- `new` scaffolds under the configured `appsDir`, optionally beneath a safe
+  group path, and must not overwrite an existing app config.
 - `validate` recursively scans the configured `appsDir` and checks config
   fields, safe relative paths, source directories, and setup files. Invalid
   applications produce a non-zero exit status.
 - `build` and `validate` print one detail line per failed application followed
   by a count summary. Successful and skipped apps do not receive individual
   lines. Any application failure produces a non-zero exit status.
+- `list` and `show` expose workspace/app inspection and offer JSON where
+  applicable. `unpack` accepts app/group targets or direct `.intunewin` paths,
+  isolates decoder side effects in a temporary directory, and securely extracts
+  its decoded ZIP result.
+- With no arguments, an interactive terminal opens the TUI; non-interactive
+  invocation prints help. `tui` opens it explicitly. Every TUI action must have
+  a non-interactive CLI command/flag equivalent. The TUI intentionally excludes
+  delete, rename, and raw config editing.
 
 When changing path or discovery behavior, cover absolute/relative paths,
 missing files, groups, nested apps, and platform-specific separators. Use
@@ -173,7 +191,7 @@ missing files, groups, nested apps, and platform-specific separators. Use
 
 The canonical definitions are in `types/types.go`:
 
-- Global: `intunewinapputil`, legacy `intuneWinAppUtilPath`,
+- Global: `intunewinapputil`, legacy `intuneWinAppUtilPath`, `decoderPath`,
   `defaultOutputDir`, `appsDir`, and `muteIntuneWinAppUtil`.
 - App: `name`, `displayName`, `source`, `setupFile`, `installCommand`,
   `uninstallCommand`, and optional `outputDir`.

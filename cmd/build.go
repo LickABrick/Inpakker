@@ -1,48 +1,22 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sort"
-	"strings"
 
-	"github.com/LickABrick/inpakker/internal/config"
-	"github.com/LickABrick/inpakker/internal/pathutil"
+	"github.com/LickABrick/inpakker/internal/packager"
+	"github.com/LickABrick/inpakker/internal/process"
+	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
-type processRunner interface {
-	Run(context.Context, string, []string, io.Writer, io.Writer) error
-}
-
-type execRunner struct{}
-
-func (execRunner) Run(ctx context.Context, name string, args []string, stdout, stderr io.Writer) error {
-	command := exec.CommandContext(ctx, name, args...)
-	command.Stdout = stdout
-	command.Stderr = stderr
-	return command.Run()
-}
-
-func newBuildCmd(runner processRunner) *cobra.Command {
+func newBuildCmd(runner process.Runner) *cobra.Command {
 	var all bool
-
 	command := &cobra.Command{
 		Use:   "build [app-name|group-name...]",
 		Short: "Package one or more applications",
 		Args: func(cmd *cobra.Command, args []string) error {
-			if all && len(args) > 0 {
-				return errors.New("--all cannot be combined with named targets")
-			}
-			if !all && len(args) == 0 {
-				return errors.New("provide an application or group name, or use --all")
-			}
-			return nil
+			return validateTargetArgs(args, all)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBuild(cmd, runner, args, all)
@@ -52,227 +26,59 @@ func newBuildCmd(runner processRunner) *cobra.Command {
 	return command
 }
 
-func runBuild(cmd *cobra.Command, runner processRunner, args []string, all bool) error {
-	globalCfg, err := config.LoadGlobalConfig("inpakker.config.json")
-	if err != nil {
-		return fmt.Errorf("load global config: %w", err)
-	}
-	if err := config.ValidateGlobal(globalCfg); err != nil {
-		return fmt.Errorf("validate global config: %w", err)
-	}
-
-	appsRoot := globalCfg.AppsDir
-	if appsRoot == "" {
-		appsRoot = "apps"
-	}
-	defaultOutputDir := globalCfg.DefaultOutputDir
-	if defaultOutputDir == "" {
-		defaultOutputDir = "output"
-	}
-
-	targets, skipped, err := discoverTargets(appsRoot, args, all)
+func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool) error {
+	ws, err := workspace.Open(".")
 	if err != nil {
 		return err
 	}
-	if len(targets) == 0 {
-		if skipped > 0 {
-			return fmt.Errorf("no valid applications found (%d %s skipped)", skipped, plural(skipped, "target", "targets"))
-		}
-		return errors.New("no valid applications found")
+	selection, err := ws.Discover(args, all)
+	if err != nil {
+		return err
+	}
+	if len(selection.Apps) == 0 {
+		return noApplicationsError(selection.Skipped)
 	}
 
-	intuneUtilPath := globalCfg.IntuneWinAppUtil
-	if intuneUtilPath == "" {
-		intuneUtilPath = globalCfg.IntuneWinAppUtilPath
+	service := packager.Service{Workspace: ws, Runner: runner}
+	if err := service.Validate(); err != nil {
+		return err
 	}
-	if strings.TrimSpace(intuneUtilPath) == "" {
-		return errors.New("intunewinapputil is not configured")
-	}
-	if info, statErr := os.Stat(intuneUtilPath); statErr != nil {
-		return fmt.Errorf("access intunewinapputil %q: %w", intuneUtilPath, statErr)
-	} else if info.IsDir() {
-		return fmt.Errorf("intunewinapputil %q is a directory", intuneUtilPath)
-	}
-
 	console := newConsole(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	console.start("Building", len(targets))
-
+	console.start("Building", len(selection.Apps))
+	results := service.Build(cmd.Context(), selection.Apps, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	succeeded, failed := 0, 0
-	for _, appPath := range targets {
-		appCfg, loadErr := config.LoadAppConfig(filepath.Join(appPath, "app.config.json"))
-		if loadErr != nil {
+	for _, result := range results {
+		if result.Err != nil {
 			failed++
-			console.failureDetail(filepath.Base(appPath), fmt.Errorf("load config: %w", loadErr))
-			continue
+			console.failureDetail(result.App.Label(), result.Err)
+		} else {
+			succeeded++
 		}
-		if validationErr := config.ValidateApp(appCfg); validationErr != nil {
-			failed++
-			console.failureDetail(appLabel(appPath, appCfg.Name), validationErr)
-			continue
-		}
-
-		sourcePath := filepath.Join(appPath, appCfg.Source)
-		if validationErr := validateBuildInput(sourcePath, appCfg.SetupFile); validationErr != nil {
-			failed++
-			console.failureDetail(appLabel(appPath, appCfg.Name), validationErr)
-			continue
-		}
-
-		outputDir := appCfg.OutputDir
-		if outputDir == "" {
-			outputDir = defaultOutputDir
-		}
-		if !safeRelativePath(outputDir) {
-			failed++
-			console.failureDetail(appLabel(appPath, appCfg.Name), errors.New("output directory must remain within the app directory"))
-			continue
-		}
-		outputPath := filepath.Join(appPath, outputDir)
-		if mkdirErr := os.MkdirAll(outputPath, 0o755); mkdirErr != nil {
-			failed++
-			console.failureDetail(appLabel(appPath, appCfg.Name), fmt.Errorf("create output directory: %w", mkdirErr))
-			continue
-		}
-
-		var stdout, stderr io.Writer
-		if !globalCfg.MuteIntuneWinAppUtil {
-			stdout = cmd.OutOrStdout()
-			stderr = cmd.ErrOrStderr()
-		}
-		runErr := runner.Run(cmd.Context(), intuneUtilPath, []string{
-			"-c", sourcePath,
-			"-s", appCfg.SetupFile,
-			"-o", outputPath,
-			"-q",
-		}, stdout, stderr)
-		if runErr != nil {
-			failed++
-			console.failureDetail(appLabel(appPath, appCfg.Name), runErr)
-			continue
-		}
-		succeeded++
 	}
-
-	console.summary("Build finished", succeeded, failed, skipped)
+	console.summary("Build finished", succeeded, failed, len(selection.Skipped))
 	if failed > 0 {
 		return reportedError{err: fmt.Errorf("%d %s failed", failed, plural(failed, "application", "applications"))}
 	}
 	return nil
 }
 
-func discoverTargets(appsRoot string, names []string, all bool) ([]string, int, error) {
-	seen := make(map[string]struct{})
-	var targets []string
-	add := func(path string) {
-		clean := filepath.Clean(path)
-		if _, exists := seen[clean]; !exists {
-			seen[clean] = struct{}{}
-			targets = append(targets, clean)
-		}
+func validateTargetArgs(args []string, all bool) error {
+	if all && len(args) > 0 {
+		return errors.New("--all cannot be combined with named targets")
 	}
-
-	if all {
-		err := filepath.Walk(appsRoot, func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if info.IsDir() {
-				if info.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				if path != filepath.Clean(appsRoot) && isFile(filepath.Join(path, "app.config.json")) {
-					add(path)
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, 0, fmt.Errorf("scan applications directory: %w", err)
-		}
-	} else {
-		skipped := 0
-		for _, name := range names {
-			candidate, pathErr := pathWithin(appsRoot, name)
-			if pathErr != nil {
-				skipped++
-				continue
-			}
-			info, statErr := os.Stat(candidate)
-			if statErr != nil || !info.IsDir() {
-				skipped++
-				continue
-			}
-			if isFile(filepath.Join(candidate, "app.config.json")) {
-				add(candidate)
-				continue
-			}
-
-			entries, readErr := os.ReadDir(candidate)
-			if readErr != nil {
-				skipped++
-				continue
-			}
-			found := false
-			for _, entry := range entries {
-				if entry.IsDir() && isFile(filepath.Join(candidate, entry.Name(), "app.config.json")) {
-					add(filepath.Join(candidate, entry.Name()))
-					found = true
-				}
-			}
-			if !found {
-				skipped++
-			}
-		}
-		sort.Strings(targets)
-		return targets, skipped, nil
-	}
-
-	sort.Strings(targets)
-	return targets, 0, nil
-}
-
-func validateBuildInput(sourcePath, setupFile string) error {
-	info, err := os.Stat(sourcePath)
-	if err != nil {
-		return fmt.Errorf("access source directory: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("source path is not a directory")
-	}
-	setupInfo, err := os.Stat(filepath.Join(sourcePath, setupFile))
-	if err != nil {
-		return fmt.Errorf("access setup file: %w", err)
-	}
-	if setupInfo.IsDir() {
-		return errors.New("setup file is a directory")
+	if !all && len(args) == 0 {
+		return errors.New("provide an application or group name, or use --all")
 	}
 	return nil
 }
 
-func pathWithin(root, name string) (string, error) {
-	if !safeRelativePath(name) || filepath.Clean(name) == "." {
-		return "", fmt.Errorf("target %q must be a relative path within the applications directory", name)
+func noApplicationsError(skipped []string) error {
+	if len(skipped) > 0 {
+		return fmt.Errorf("no valid applications found (%d %s skipped)", len(skipped), plural(len(skipped), "target", "targets"))
 	}
-	return filepath.Join(root, filepath.Clean(name)), nil
-}
-
-func safeRelativePath(path string) bool {
-	return pathutil.IsSafeRelative(path)
-}
-
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func appLabel(path, configuredName string) string {
-	if strings.TrimSpace(configuredName) != "" {
-		return configuredName
-	}
-	return filepath.Base(path)
+	return errors.New("no valid applications found")
 }
 
 func init() {
-	rootCmd.AddCommand(newBuildCmd(execRunner{}))
+	rootCmd.AddCommand(newBuildCmd(process.ExecRunner{}))
 }

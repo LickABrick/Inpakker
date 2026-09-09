@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/LickABrick/inpakker/internal/process"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +19,14 @@ var rootCmd = &cobra.Command{
 	Short:         "Package Win32 applications for Microsoft Intune",
 	SilenceErrors: true,
 	SilenceUsage:  true,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		input, inputOK := cmd.InOrStdin().(*os.File)
+		output, outputOK := cmd.OutOrStdout().(*os.File)
+		if inputOK && outputOK && term.IsTerminal(input.Fd()) && term.IsTerminal(output.Fd()) {
+			return runTUI(cmd, process.ExecRunner{})
+		}
+		return cmd.Help()
+	},
 }
 
 // SetVersion configures the version reported by Cobra's --version flag.

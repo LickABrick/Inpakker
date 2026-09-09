@@ -1,68 +1,57 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
-	"path/filepath"
 
-	"github.com/LickABrick/inpakker/internal/config"
+	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 func newValidateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "validate",
-		Short: "Validate every application in the workspace",
-		Args:  cobra.NoArgs,
-		RunE:  runValidate,
+	var all bool
+	command := &cobra.Command{
+		Use:   "validate [app-name|group-name...]",
+		Short: "Validate applications in the workspace",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all && len(args) > 0 {
+				return fmt.Errorf("--all cannot be combined with named targets")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runValidate(cmd, args, all || len(args) == 0)
+		},
 	}
+	command.Flags().BoolVar(&all, "all", false, "Validate every application in the workspace")
+	return command
 }
 
-func runValidate(cmd *cobra.Command, _ []string) error {
-	globalCfg, err := config.LoadGlobalConfig("inpakker.config.json")
-	if err != nil {
-		return fmt.Errorf("load global config: %w", err)
-	}
-	if err := config.ValidateGlobal(globalCfg); err != nil {
-		return fmt.Errorf("validate global config: %w", err)
-	}
-	appsRoot := globalCfg.AppsDir
-	if appsRoot == "" {
-		appsRoot = "apps"
-	}
-
-	targets, _, err := discoverTargets(appsRoot, nil, true)
+func runValidate(cmd *cobra.Command, args []string, all bool) error {
+	ws, err := workspace.Open(".")
 	if err != nil {
 		return err
 	}
-	if len(targets) == 0 {
-		return errors.New("no applications found")
+	selection, err := ws.Discover(args, all)
+	if err != nil {
+		return err
+	}
+	if len(selection.Apps) == 0 {
+		return noApplicationsError(selection.Skipped)
 	}
 
 	console := newConsole(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	console.start("Validating", len(targets))
+	console.start("Validating", len(selection.Apps))
 	valid, invalid := 0, 0
-	for _, appPath := range targets {
-		appCfg, loadErr := config.LoadAppConfig(filepath.Join(appPath, "app.config.json"))
-		if loadErr != nil {
-			invalid++
-			console.failureDetail(filepath.Base(appPath), fmt.Errorf("load config: %w", loadErr))
+	for _, ref := range selection.Apps {
+		app := ws.Inspect(ref)
+		if app.Status == "valid" {
+			valid++
 			continue
 		}
-		if validationErr := config.ValidateApp(appCfg); validationErr != nil {
-			invalid++
-			console.failureDetail(appLabel(appPath, appCfg.Name), validationErr)
-			continue
-		}
-		if validationErr := validateBuildInput(filepath.Join(appPath, appCfg.Source), appCfg.SetupFile); validationErr != nil {
-			invalid++
-			console.failureDetail(appLabel(appPath, appCfg.Name), validationErr)
-			continue
-		}
-		valid++
+		invalid++
+		console.failureDetail(app.Label(), fmt.Errorf("%s", app.Error))
 	}
-
-	console.summary("Validation finished", valid, invalid, 0)
+	console.summary("Validation finished", valid, invalid, len(selection.Skipped))
 	if invalid > 0 {
 		return reportedError{err: fmt.Errorf("%d invalid %s", invalid, plural(invalid, "application", "applications"))}
 	}
