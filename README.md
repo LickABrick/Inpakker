@@ -1,6 +1,9 @@
 # Inpakker
 
-Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUtil.exe` to help you organize and package multiple Win32 apps for Microsoft Intune deployment.
+Inpakker is a Windows CLI and terminal interface for organizing, validating,
+packaging, and inspecting Win32 applications for Microsoft Intune. Packaging is
+delegated to Microsoft's `IntuneWinAppUtil.exe`; optional unpacking is delegated
+to the separately installed `IntuneWinAppUtilDecoder.exe` project.
 
 ## Quick Start
 
@@ -13,7 +16,9 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
       ├─ inpakker.config.json
       └─ apps/
          ├─ app1/
-         │  └─ app.config.json
+         │  ├─ app.config.json
+         │  └─ source/
+         │     └─ setup.exe
          └─ app2/
             └─ app.config.json
     ```
@@ -26,6 +31,9 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
     path/to/inpakker build app1 app2
     ```
 
+   Run `inpakker` without arguments in an interactive terminal to open the TUI.
+   Scripts and redirected sessions receive command help instead.
+
 *Note:* Replace `path/to/inpakker` with the path to the downloaded executable. On Windows, this might be `.\inpakker.exe`.
 
 ## Configuration Reference
@@ -35,19 +43,29 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 ```json
 {
   "intunewinapputil": "C:\\Tools\\IntuneWinAppUtil.exe",
+  "decoderPath": "C:\\Tools\\IntuneWinAppUtilDecoder.exe",
   "defaultOutputDir": "output",
-  "appsDir": "apps"
+  "appsDir": "apps",
+  "muteIntuneWinAppUtil": false
 }
 ```
 
 * **`intunewinapputil`**
   Full path to the `IntuneWinAppUtil.exe` executable used for packaging.
+  The legacy key `intuneWinAppUtilPath` remains accepted for compatibility.
+
+* **`decoderPath`**
+  Optional full path to `IntuneWinAppUtilDecoder.exe`. This is required only by
+  `unpack` and the TUI unpack action. Inpakker does not redistribute the decoder.
 
 * **`defaultOutputDir`**
   Default output folder inside each app folder for the generated `.intunewin` file.
 
 * **`appsDir`**
   Root directory containing all app folders.
+
+* **`muteIntuneWinAppUtil`**
+  Suppresses the wrapped packaging tool's stdout and stderr when `true`.
 
 ---
 
@@ -91,10 +109,12 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 
 ## Commands
 
-Create an application scaffold under the configured `appsDir`:
+Create an application scaffold under the configured `appsDir`, optionally in a
+group:
 
 ```shell
 inpakker new myapp
+inpakker new myapp --group browsers --display-name "My App" --setup-file setup.exe
 ```
 
 The command refuses to overwrite an existing `app.config.json`. Add the setup
@@ -104,6 +124,7 @@ Validate every app recursively under `appsDir`:
 
 ```shell
 inpakker validate
+inpakker validate browsers/myapp
 ```
 
 Validation checks required fields, relative paths, source directories, and
@@ -120,6 +141,52 @@ Build output reports individual failures and one final summary instead of one
 status line per successful or skipped app. Any packaging failure causes a
 non-zero exit status.
 
+List applications or show one application's details:
+
+```shell
+inpakker list
+inpakker list browsers --json
+inpakker show browsers/myapp
+```
+
+`list --json` and `show --json` provide machine-readable output.
+
+### Unpacking
+
+The decoder is maintained separately by Oliver Kieselbach. Download
+`IntuneWinAppUtilDecoder.zip` or the executable from the project's
+[checked-in `bin/Release` folder](https://github.com/okieselbach/Intune/tree/master/IntuneWinAppUtilDecoder/IntuneWinAppUtilDecoder/bin/Release),
+review that third-party project as appropriate for your environment, extract it,
+and set `decoderPath` to the full path of `IntuneWinAppUtilDecoder.exe`. The
+current decoder project targets .NET Framework 4.6.1 and is intended to run on
+Windows.
+
+Unpack the single package produced for an app, a direct package path, or all
+apps that currently have exactly one package:
+
+```shell
+inpakker unpack browsers/myapp
+inpakker unpack C:\\Packages\\myapp.intunewin --destination C:\\Decoded\\myapp
+inpakker unpack --all
+```
+
+By default output is written to `decoded/<package-name>` beside the package.
+Existing destinations are preserved unless `--force` is supplied. Inpakker
+stages decoder execution in a temporary directory and rejects unsafe paths in
+the resulting ZIP archive.
+
+### Terminal interface
+
+Run `inpakker` with no arguments, or run `inpakker tui`, to open the terminal
+interface. It provides fuzzy search, application status and details, guided app
+creation, refresh, and validate/build/unpack actions for either the selected app
+or the complete workspace. Its key hints are shown at the bottom of each view.
+
+Every TUI operation has a CLI equivalent: `list`, `show`, `new`, `validate`,
+`build`, and `unpack`. Destructive workspace operations and raw configuration
+editing are intentionally not included; use a version-controlled editor for
+those tasks.
+
 ## Version
 
 Display the version embedded in a release build with:
@@ -131,6 +198,8 @@ inpakker --version
 Local development builds report `dev`. Tagged releases use Semantic Versioning
 and are published on GitHub with a Windows AMD64 ZIP and a SHA-256 checksum
 manifest.
+
+Building v0.2 and later from source requires Go 1.25 or newer.
 
 ## Releasing
 

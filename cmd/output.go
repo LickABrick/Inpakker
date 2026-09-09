@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 type console struct {
@@ -18,22 +20,23 @@ type console struct {
 }
 
 func newConsole(out, errOut io.Writer) *console {
-	outRenderer := lipgloss.NewRenderer(out)
-	errRenderer := lipgloss.NewRenderer(errOut)
-
 	return &console{
-		out:      out,
-		err:      errOut,
-		heading:  outRenderer.NewStyle().Bold(true),
-		success:  outRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color("2")),
-		failure:  outRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
-		muted:    outRenderer.NewStyle().Foreground(lipgloss.Color("8")),
-		errLabel: errRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
+		out:      colorprofile.NewWriter(out, os.Environ()),
+		err:      colorprofile.NewWriter(errOut, os.Environ()),
+		heading:  lipgloss.NewStyle().Bold(true),
+		success:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2")),
+		failure:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
+		muted:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		errLabel: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
 	}
 }
 
 func (c *console) start(action string, count int) {
-	fmt.Fprintf(c.out, "%s %d %s\n", c.heading.Render(action), count, plural(count, "application", "applications"))
+	c.startCount(action, count, "application", "applications")
+}
+
+func (c *console) startCount(action string, count int, singular, multiple string) {
+	fmt.Fprintf(c.out, "%s %d %s\n", c.heading.Render(action), count, plural(count, singular, multiple))
 }
 
 func (c *console) failureDetail(name string, err error) {
