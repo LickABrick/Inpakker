@@ -12,10 +12,10 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
     workspace/
       ├─ inpakker.config.json
       └─ apps/
-      ├─ app1/
-      │   └─ app.config.json
-      └─ app2/
-      └─ app.config.json
+         ├─ app1/
+         │  └─ app.config.json
+         └─ app2/
+            └─ app.config.json
     ```
 
 3. Edit the global and app configuration files as needed (see below).
@@ -24,7 +24,7 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 
     ```bash
     path/to/inpakker build app1 app2
-    ````
+    ```
 
 *Note:* Replace `path/to/inpakker` with the path to the downloaded executable. On Windows, this might be `.\inpakker.exe`.
 
@@ -88,3 +88,62 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 * Paths are relative to the location of the config files.
 * The global config (`inpakker.config.json`) **must** be in your workspace root.
 * Each app folder inside `appsDir` requires its own `app.config.json`.
+
+## Commands
+
+Create an application scaffold under the configured `appsDir`:
+
+```shell
+inpakker new myapp
+```
+
+The command refuses to overwrite an existing `app.config.json`. Add the setup
+file and set `setupFile` before validating or building the app.
+
+Validate every app recursively under `appsDir`:
+
+```shell
+inpakker validate
+```
+
+Validation checks required fields, relative paths, source directories, and
+setup files. Invalid apps are listed and cause a non-zero exit status.
+
+Build named apps or immediate app groups, or build the complete workspace:
+
+```shell
+inpakker build app1 app2
+inpakker build --all
+```
+
+Build output reports individual failures and one final summary instead of one
+status line per successful or skipped app. Any packaging failure causes a
+non-zero exit status.
+
+## Version
+
+Display the version embedded in a release build with:
+
+```shell
+inpakker --version
+```
+
+Local development builds report `dev`. Tagged releases use Semantic Versioning
+and are published on GitHub with a Windows AMD64 ZIP and a SHA-256 checksum
+manifest.
+
+## Releasing
+
+After merging a completed version branch into `master`, create and push an
+annotated Semantic Version tag from the release commit:
+
+```shell
+git switch master
+git pull --ff-only
+git tag -a v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
+```
+
+The release workflow rejects lightweight tags, invalid version tags, and tags
+whose commits are not contained in `master`. A valid tag runs the verification
+suite and publishes the GitHub Release automatically.
