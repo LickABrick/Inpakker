@@ -8,8 +8,9 @@ applications for Microsoft Intune. It wraps Microsoft's external
 itself.
 
 The Go module is `github.com/LickABrick/inpakker` and currently targets Go
-1.25.0. Cobra provides the CLI command structure. Bubble Tea, Bubbles, and Lip
-Gloss provide the interactive terminal UI and terminal-aware presentation.
+1.25.8. Cobra provides the CLI command structure. Bubble Tea, Bubbles, Huh, and
+Lip Gloss provide the interactive terminal UI, forms, progress, and
+terminal-aware presentation.
 
 ## Repository map
 
@@ -18,6 +19,9 @@ Gloss provide the interactive terminal UI and terminal-aware presentation.
   commands thin and call reusable internal services.
 - `cmd/output.go`: shared, terminal-aware command presentation.
 - `internal/config/`: JSON file loaders.
+- `internal/buildcache/`: versioned build cache and deterministic input
+  fingerprinting.
+- `internal/cliui/`: reusable interactive CLI progress rendering.
 - `internal/workspace/`: workspace discovery, inspection, validation, package
   lookup, and application scaffolding.
 - `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
@@ -31,9 +35,10 @@ Gloss provide the interactive terminal UI and terminal-aware presentation.
 - `README.md`: user-facing setup, workspace layout, and configuration reference.
 
 Tests cover configuration validation, target discovery, command summaries,
-packaging failures, scaffold safety, decoder isolation, and ZIP extraction
-safety. There is no checked-in example workspace. GitHub Actions runs tests on
-Linux and Windows, and GoReleaser publishes tagged releases.
+incremental builds, usage errors, onboarding, packaging failures, scaffold
+safety, decoder isolation, and ZIP extraction safety. There is no checked-in
+example workspace. GitHub Actions runs tests on Linux and Windows, and
+GoReleaser publishes tagged releases.
 
 ## Git workflow
 
@@ -95,8 +100,9 @@ The packaging and unpacking integrations can only be exercised where their
 configured Windows executables are available. Do not treat inability to run
 those external executables on Linux as a product failure. Do not commit
 generated Windows executables, `.intunewin` packages, decoded contents,
-coverage output, or local test workspaces. A locally built extensionless Unix
-binary is not currently ignored, so take care not to stage one.
+build caches, coverage output, or local test workspaces. A locally built
+extensionless Unix binary is not currently ignored, so take care not to stage
+one.
 
 If the local Go toolchain itself is unavailable or broken, report that
 separately and do not claim the checks passed.
@@ -172,8 +178,13 @@ them:
   fields, safe relative paths, source directories, and setup files. Invalid
   applications produce a non-zero exit status.
 - `build` and `validate` print one detail line per failed application followed
-  by a count summary. Successful and skipped apps do not receive individual
-  lines. Any application failure produces a non-zero exit status.
+  by a count summary. Build successes may use one concise check line; unchanged
+  and missing targets are aggregated. Any application failure produces a
+  non-zero exit status.
+- `build` fingerprints configuration, source names/content, and packaging-tool
+  identity. It skips only when the versioned cache matches and every recorded
+  artifact still exists. `--force` bypasses the match and updates the cache;
+  `--no-cache` bypasses cache reads and writes. Failed builds do not update it.
 - `list` and `show` expose workspace/app inspection and offer JSON where
   applicable. `unpack` accepts app/group targets or direct `.intunewin` paths,
   isolates decoder side effects in a temporary directory, and securely extracts
@@ -182,6 +193,10 @@ them:
   invocation prints help. `tui` opens it explicitly. Every TUI action must have
   a non-interactive CLI command/flag equivalent. The TUI intentionally excludes
   delete, rename, and raw config editing.
+- `setup` initializes the config and directories and creates a valid PowerShell
+  example unless `--no-example` is used. `doctor` performs read-only workspace
+  checks. A missing config encountered during interactive TUI startup launches
+  setup rather than returning an unassisted file error.
 
 When changing path or discovery behavior, cover absolute/relative paths,
 missing files, groups, nested apps, and platform-specific separators. Use
@@ -215,7 +230,14 @@ for future use and are not part of the packaging invocation today.
 - Keep user output concise and consistent with the existing info, warning,
   failure, and summary messages. Use the shared console in `cmd/output.go`.
   Lip Gloss styling must degrade cleanly for redirected/non-interactive output;
-  never emit unconditional ANSI sequences. Do not add emoji status markers.
+  never emit unconditional ANSI sequences. Use `✓`, `!`, `X`, and `-` as the
+  standard success, warning, failure, and skipped/current markers; do not add
+  emoji status markers.
+- Invocation and flag errors must include command usage. Operational errors
+  must remain concise and must not dump usage. Interactive prompts require a
+  terminal and must have flag-based, `--no-input` alternatives. JSON output
+  must never prompt or animate. Use Huh for forms and the shared CLI progress
+  model for long, measurable work.
 - Use standard-library functionality unless a dependency provides a clear
   benefit. Run `go mod tidy` after intentionally changing dependencies and
   include both `go.mod` and `go.sum` changes.

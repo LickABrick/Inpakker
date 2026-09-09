@@ -9,12 +9,32 @@ import (
 
 func newNewCmd() *cobra.Command {
 	var options workspace.CreateOptions
+	var noInput bool
 	command := &cobra.Command{
 		Use:   "new [app-name]",
 		Short: "Create a new application configuration",
-		Args:  cobra.ExactArgs(1),
+		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			options.Name = args[0]
+			if len(args) == 1 {
+				options.Name = args[0]
+			}
+			if interactive(cmd) && !noInput {
+				ws, err := workspace.Open(".")
+				if err != nil {
+					return err
+				}
+				if options.DisplayName == "" {
+					options.DisplayName = options.Name
+				}
+				if options.OutputDir == "" {
+					options.OutputDir = ws.DefaultOutputDir()
+				}
+				if err := promptNew(cmd, &options); err != nil {
+					return err
+				}
+			} else if options.Name == "" {
+				return asUsage(fmt.Errorf("application name is required"))
+			}
 			return runNew(cmd, options)
 		},
 	}
@@ -23,6 +43,7 @@ func newNewCmd() *cobra.Command {
 	command.Flags().StringVar(&options.Source, "source", "source", "Source directory within the application")
 	command.Flags().StringVar(&options.SetupFile, "setup-file", "", "Setup filename within the source directory")
 	command.Flags().StringVar(&options.OutputDir, "output-dir", "", "Output directory within the application")
+	command.Flags().BoolVar(&noInput, "no-input", false, "Disable interactive prompts")
 	return command
 }
 

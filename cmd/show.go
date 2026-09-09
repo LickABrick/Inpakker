@@ -10,15 +10,24 @@ import (
 )
 
 func newShowCmd() *cobra.Command {
-	var jsonOutput bool
+	var jsonOutput, noInput bool
 	command := &cobra.Command{
 		Use:   "show [app-name]",
 		Short: "Show application details",
-		Args:  cobra.ExactArgs(1),
+		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws, err := workspace.Open(".")
 			if err != nil {
 				return err
+			}
+			if len(args) == 0 {
+				if jsonOutput || noInput || !interactive(cmd) {
+					return asUsage(fmt.Errorf("application name is required"))
+				}
+				args, err = promptApplications(cmd, ws, "Application to show", false, false)
+				if err != nil {
+					return err
+				}
 			}
 			ref, err := ws.Find(args[0])
 			if err != nil {
@@ -49,6 +58,7 @@ func newShowCmd() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&jsonOutput, "json", false, "Write machine-readable JSON")
+	command.Flags().BoolVar(&noInput, "no-input", false, "Disable interactive target selection")
 	return command
 }
 

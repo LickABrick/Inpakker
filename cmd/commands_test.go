@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LickABrick/inpakker/internal/buildcache"
 	workspace2 "github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/LickABrick/inpakker/types"
 )
@@ -32,6 +33,23 @@ func (r *fakeRunner) Run(_ context.Context, name string, args []string, _, _ io.
 	if r.hook != nil {
 		return r.hook(name, args)
 	}
+	if r.err == nil {
+		var output, setup string
+		for index := 0; index+1 < len(args); index++ {
+			switch args[index] {
+			case "-o":
+				output = args[index+1]
+			case "-s":
+				setup = args[index+1]
+			}
+		}
+		if output != "" && setup != "" {
+			artifact := strings.TrimSuffix(filepath.Base(setup), filepath.Ext(setup)) + ".intunewin"
+			if err := os.WriteFile(filepath.Join(output, artifact), []byte("package"), 0o644); err != nil {
+				return err
+			}
+		}
+	}
 	return r.err
 }
 
@@ -50,6 +68,26 @@ func TestDiscoverTargetsRejectsTraversalAndDeduplicates(t *testing.T) {
 	}
 	if len(selection.Skipped) != 2 {
 		t.Fatalf("got %d skipped targets, want 2", len(selection.Skipped))
+	}
+}
+
+func TestUsageErrorPrintsCommandUsage(t *testing.T) {
+	command := newNewCmd()
+	command.SetIn(bytes.NewReader(nil))
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	command.SetArgs(nil)
+	err := command.Execute()
+	var usage usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("new error = %v, want usageError", err)
+	}
+	var output bytes.Buffer
+	reportCommandError(&output, command, err)
+	for _, expected := range []string{"Error: application name is required", "Usage:", "new [app-name] [flags]", "--no-input"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("output %q does not contain %q", output.String(), expected)
+		}
 	}
 }
 
@@ -103,12 +141,12 @@ func TestBuildSummarizesResultsAndReturnsFailure(t *testing.T) {
 	if !containsSequence(runner.calls[0].args, "-o", filepath.Join(workspace, "packages", "good", "artifacts")) {
 		t.Fatalf("runner args do not contain configured output: %v", runner.calls[0].args)
 	}
-	for _, expected := range []string{"Building 2 applications", "1 succeeded", "1 failed", "1 skipped"} {
+	for _, expected := range []string{"Building 2 applications", "1 built", "1 failed", "1 not found"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("stdout %q does not contain %q", stdout.String(), expected)
 		}
 	}
-	if !strings.Contains(stderr.String(), "FAILED bad: access setup file") {
+	if !strings.Contains(stderr.String(), "X bad: access setup file") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
@@ -132,11 +170,74 @@ func TestBuildReturnsFailureWhenPackagerFails(t *testing.T) {
 	if !errors.As(err, &reported) {
 		t.Fatalf("build error = %v, want reportedError", err)
 	}
-	if !strings.Contains(stdout.String(), "0 succeeded") || !strings.Contains(stdout.String(), "1 failed") {
+	if !strings.Contains(stdout.String(), "0 built") || !strings.Contains(stdout.String(), "1 failed") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "packager exited with code 1") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(workspace, buildcache.FileName)); !os.IsNotExist(err) {
+		t.Fatalf("failed build created a cache file: %v", err)
+	}
+}
+
+func TestBuildSkipsUnchangedApplicationAndForceRebuilds(t *testing.T) {
+	workspace := enterWorkspace(t)
+	utilPath := filepath.Join(workspace, "IntuneWinAppUtil.exe")
+	writeFile(t, utilPath, "stub")
+	writeGlobal(t, types.GlobalConfig{IntuneWinAppUtil: utilPath, MuteIntuneWinAppUtil: true})
+	writeApp(t, filepath.Join(workspace, "apps", "example"), validApp("example"), true)
+
+	runner := &fakeRunner{}
+	first := newBuildCmd(runner)
+	first.SetOut(io.Discard)
+	first.SetErr(io.Discard)
+	first.SetArgs([]string{"example"})
+	if err := first.Execute(); err != nil {
+		t.Fatalf("first build returned %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("first build made %d calls, want 1", len(runner.calls))
+	}
+
+	second := newBuildCmd(runner)
+	var output bytes.Buffer
+	second.SetOut(&output)
+	second.SetErr(io.Discard)
+	second.SetArgs([]string{"example"})
+	if err := second.Execute(); err != nil {
+		t.Fatalf("second build returned %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("unchanged build made another utility call: %d total", len(runner.calls))
+	}
+	if !strings.Contains(output.String(), "1 up to date") {
+		t.Fatalf("unexpected unchanged output: %q", output.String())
+	}
+
+	if err := os.Remove(filepath.Join(workspace, "apps", "example", "output", "setup.intunewin")); err != nil {
+		t.Fatal(err)
+	}
+	missingOutput := newBuildCmd(runner)
+	missingOutput.SetOut(io.Discard)
+	missingOutput.SetErr(io.Discard)
+	missingOutput.SetArgs([]string{"example"})
+	if err := missingOutput.Execute(); err != nil {
+		t.Fatalf("missing-output build returned %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("missing output made %d total calls, want 2", len(runner.calls))
+	}
+
+	forced := newBuildCmd(runner)
+	forced.SetOut(io.Discard)
+	forced.SetErr(io.Discard)
+	forced.SetArgs([]string{"example", "--force"})
+	if err := forced.Execute(); err != nil {
+		t.Fatalf("forced build returned %v", err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("forced build made %d total calls, want 3", len(runner.calls))
 	}
 }
 
@@ -196,7 +297,7 @@ func TestValidateFindsNestedAppsAndReturnsFailure(t *testing.T) {
 		!strings.Contains(stdout.String(), "1 failed") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "FAILED bad") {
+	if !strings.Contains(stderr.String(), "X bad") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }

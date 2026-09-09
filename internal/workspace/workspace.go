@@ -23,6 +23,9 @@ func Open(root string) (*Workspace, error) {
 	}
 	cfg, err := config.LoadGlobalConfig(filepath.Join(absRoot, ConfigFile))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("workspace is not initialized; run 'inpakker setup': %w", err)
+		}
 		return nil, fmt.Errorf("load global config: %w", err)
 	}
 	if err := config.ValidateGlobal(cfg); err != nil {

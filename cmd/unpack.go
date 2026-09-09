@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/LickABrick/inpakker/internal/cliui"
 	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/unpacker"
@@ -23,22 +25,45 @@ type unpackFailure struct {
 	err   error
 }
 
+type unpackExecution struct {
+	succeeded       int
+	failures        []unpackFailure
+	onlyDestination string
+}
+
 func newUnpackCmd(runner process.Runner) *cobra.Command {
-	var all, force bool
+	var all, force, noInput bool
 	var destination string
 	command := &cobra.Command{
 		Use:   "unpack [app-name|group-name|package.intunewin...]",
 		Short: "Unpack applications using an external decoder",
 		Args: func(cmd *cobra.Command, args []string) error {
-			return validateTargetArgs(args, all)
+			if all && len(args) > 0 {
+				return asUsage(errors.New("--all cannot be combined with named targets"))
+			}
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !all && len(args) == 0 {
+				if noInput || !interactive(cmd) {
+					return asUsage(errors.New("provide an application, group, or package path, or use --all"))
+				}
+				ws, err := workspace.Open(".")
+				if err != nil {
+					return err
+				}
+				args, err = promptApplications(cmd, ws, "Application to unpack", false, true)
+				if err != nil {
+					return err
+				}
+			}
 			return runUnpack(cmd, runner, args, all, destination, force)
 		},
 	}
 	command.Flags().BoolVar(&all, "all", false, "Unpack every application package in the workspace")
 	command.Flags().BoolVar(&force, "force", false, "Replace an existing destination directory")
 	command.Flags().StringVar(&destination, "destination", "", "Destination for a single package")
+	command.Flags().BoolVar(&noInput, "no-input", false, "Disable interactive target selection")
 	return command
 }
 
@@ -64,30 +89,51 @@ func runUnpack(cmd *cobra.Command, runner process.Runner, args []string, all boo
 	}
 
 	console := newConsole(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	console.startCount("Unpacking", len(targets)+len(failures), "package", "packages")
-	for _, failure := range failures {
+	var execution unpackExecution
+	if interactive(cmd) {
+		value, progressErr := cliui.Run(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), "Unpacking applications", len(targets)+len(failures), func(ctx context.Context, emit func(cliui.Event)) (any, error) {
+			return executeUnpack(ctx, service, targets, failures, destination, force, emit), nil
+		})
+		if progressErr != nil {
+			return progressErr
+		}
+		execution, _ = value.(unpackExecution)
+	} else {
+		console.startCount("Unpacking", len(targets)+len(failures), "package", "packages")
+		execution = executeUnpack(cmd.Context(), service, targets, failures, destination, force, nil)
+	}
+	for _, failure := range execution.failures {
 		console.failureDetail(failure.label, failure.err)
 	}
-	succeeded, failed := 0, len(failures)
-	var onlyDestination string
-	for _, target := range targets {
-		result := service.Unpack(cmd.Context(), target.path, destination, force, nil, nil)
-		if result.Err != nil {
-			failed++
-			console.failureDetail(target.label, result.Err)
-			continue
-		}
-		succeeded++
-		onlyDestination = result.Destination
-	}
-	console.summary("Unpack finished", succeeded, failed, len(skipped))
-	if succeeded == 1 && failed == 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "Output: %s\n", onlyDestination)
+	failed := len(execution.failures)
+	console.summary("Unpack finished", execution.succeeded, failed, len(skipped))
+	if execution.succeeded == 1 && failed == 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Output: %s\n", execution.onlyDestination)
 	}
 	if failed > 0 {
 		return reportedError{err: fmt.Errorf("%d %s failed", failed, plural(failed, "package", "packages"))}
 	}
 	return nil
+}
+
+func executeUnpack(ctx context.Context, service unpacker.Service, targets []unpackTarget, initialFailures []unpackFailure, destination string, force bool, emit func(cliui.Event)) unpackExecution {
+	execution := unpackExecution{failures: append([]unpackFailure(nil), initialFailures...)}
+	total := len(targets) + len(initialFailures)
+	completed := len(initialFailures)
+	for _, target := range targets {
+		if emit != nil {
+			emit(cliui.Event{Current: completed, Total: total, Label: target.label, Phase: "decoding"})
+		}
+		result := service.Unpack(ctx, target.path, destination, force, nil, nil)
+		completed++
+		if result.Err != nil {
+			execution.failures = append(execution.failures, unpackFailure{label: target.label, err: result.Err})
+			continue
+		}
+		execution.succeeded++
+		execution.onlyDestination = result.Destination
+	}
+	return execution
 }
 
 func resolveUnpackTargets(ws *workspace.Workspace, args []string, all bool) ([]unpackTarget, []unpackFailure, []string, error) {

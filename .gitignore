@@ -36,3 +36,4 @@ go.work.sum
 # workspace folder (used for testing)
 /workspace/
 decoded/
+.inpakker-cache.json
