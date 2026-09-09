@@ -12,8 +12,14 @@ permissions:
 
 jobs:
   verify:
-    name: Verify
-    runs-on: ubuntu-latest
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -25,6 +31,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: test -z "$(gofmt -l .)"
 
       - name: Test
