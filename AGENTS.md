@@ -2,28 +2,48 @@
 
 ## Project overview
 
-Inpakker is a small Go CLI for organizing and packaging Win32 applications for
-Microsoft Intune. It wraps Microsoft's external `IntuneWinAppUtil.exe`; it does
-not implement the `.intunewin` packaging format itself.
+Inpakker is a small Go CLI and terminal UI for organizing and packaging Win32
+applications for Microsoft Intune. It wraps Microsoft's external
+`IntuneWinAppUtil.exe`; it does not implement the `.intunewin` packaging format
+itself.
 
 The Go module is `github.com/LickABrick/inpakker` and currently targets Go
-1.24.4. Cobra provides the CLI command structure.
+1.25.8. Cobra provides the CLI command structure. Bubble Tea, Bubbles, Huh, and
+Lip Gloss provide the interactive terminal UI, forms, progress, and
+terminal-aware presentation.
 
 ## Repository map
 
 - `main.go`: executable entry point; delegates to `cmd.Execute`.
-- `cmd/root.go`: root Cobra command and process exit behavior.
-- `cmd/build.go`: target discovery and invocation of `IntuneWinAppUtil.exe`.
-- `cmd/new.go`: scaffolds a new application directory and config.
-- `cmd/validate.go`: recursively validates application configs and inputs.
+- `cmd/`: CLI commands, process exit behavior, and the TUI entry point. Keep
+  commands thin and call reusable internal services.
 - `cmd/output.go`: shared, terminal-aware command presentation.
 - `internal/config/`: JSON file loaders.
+- `internal/buildcache/`: versioned build cache and deterministic input
+  fingerprinting.
+- `internal/cliui/`: reusable interactive CLI progress rendering.
+- `internal/workspace/`: workspace discovery, inspection, validation, package
+  lookup, and application scaffolding.
+- `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
+- `internal/unpacker/`: isolated external decoder execution and secure archive
+  extraction.
+- `internal/updater/`: daily GitHub release discovery, cached update state,
+  signed checksum verification, archive validation, and rollback-aware
+  executable replacement.
+- `internal/process/`: injectable external-process runner.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
+- `internal/tui/`: Bubble Tea workspace interface; it composes the same services
+  used by CLI commands.
 - `types/types.go`: JSON-backed global and application configuration types.
-- `README.md`: user-facing setup, workspace layout, and configuration reference.
+- `README.md`: concise end-user installation, features, and common workflows.
+- `docs/`: detailed end-user configuration and troubleshooting references.
+- `CONTRIBUTING.md` and `SECURITY.md`: public contribution and vulnerability
+  reporting guidance.
 
 Tests cover configuration validation, target discovery, command summaries,
-packaging failures, and scaffold safety. There is no checked-in example
+incremental builds, usage errors, onboarding, packaging failures, scaffold
+safety, decoder isolation, ZIP extraction safety, update caching, release
+discovery, and signed update verification. There is no checked-in example
 workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
 publishes tagged releases.
 
@@ -80,15 +100,16 @@ go build ./...
 
 Use `go test ./...` even while there are no explicit test files: it compiles all
 packages. Add focused unit tests for new parsing, validation, discovery, or path
-logic. Keep tests independent of an installed `IntuneWinAppUtil.exe`; inject or
-isolate process execution when testing build orchestration.
+logic. Keep tests independent of installed `IntuneWinAppUtil.exe` and
+`IntuneWinAppUtilDecoder.exe` binaries; inject or isolate process execution.
 
-The packaging integration can only be exercised where the configured Windows
-executable is available. Do not treat inability to run that external executable
-on Linux as a product failure. Do not commit generated Windows executables,
-`.intunewin` packages, coverage output, or local test workspaces; these are
-covered by `.gitignore`. A locally built extensionless Unix binary is not
-currently ignored, so take care not to stage one.
+The packaging and unpacking integrations can only be exercised where their
+configured Windows executables are available. Do not treat inability to run
+those external executables on Linux as a product failure. Do not commit
+generated Windows executables, `.intunewin` packages, decoded contents,
+build caches, coverage output, or local test workspaces. A locally built
+extensionless Unix binary is not currently ignored, so take care not to stage
+one.
 
 If the local Go toolchain itself is unavailable or broken, report that
 separately and do not claim the checks passed.
@@ -116,15 +137,19 @@ whose commits are not contained in `master`, are rejected.
 Release artifacts have stable, machine-readable names that include the project,
 version, operating system, and architecture, for example
 `inpakker_v1.2.3_windows_amd64.zip`. The supported release target is currently
-Windows AMD64. Publish a checksum manifest alongside the archives. Do not commit
-release binaries or archives to the repository.
+Windows AMD64. Publish a checksum manifest, its detached ECDSA signature, and a
+GitHub provenance attestation alongside the archives. The signing certificate
+in `internal/updater/release-signing-cert.pem` is public; its matching private
+key must exist only in secure maintainer storage and the encrypted
+`INPAKKER_RELEASE_SIGNING_KEY` GitHub Actions secret. Do not commit release
+binaries, archives, signatures, or private keys to the repository.
 
-Keep the release metadata suitable for a future in-app version check. Tags and
-GitHub Releases are the source of truth; avoid mutable version labels such as
-`latest` inside filenames. A future checker should compare semantic versions
-and should fail gracefully when GitHub is unreachable. Adding remote version
-checks is future work. The current CLI exposes the embedded release version
-through `inpakker --version`; development builds report `dev`.
+Tags and GitHub Releases are the update source of truth; avoid mutable version
+labels such as `latest` inside filenames. The updater accepts stable releases
+only and must require the versioned Windows archive, checksum manifest, and
+trusted manifest signature before installation. The CLI exposes the embedded
+release version through `inpakker --version`; development builds report `dev`
+and may not replace themselves.
 
 ## CLI behavior and workspace model
 
@@ -156,14 +181,40 @@ them:
   `intuneWinAppUtilPath` key is also accepted as a fallback.
 - `muteIntuneWinAppUtil` controls whether the wrapped tool inherits stdout and
   stderr.
-- `new` scaffolds under the configured `appsDir`, accepts a single directory
-  name, and must not overwrite an existing app config.
+- `decoderPath` points to a separately installed
+  `IntuneWinAppUtilDecoder.exe`; no decoder binary is embedded or distributed.
+- `new` scaffolds under the configured `appsDir`, optionally beneath a safe
+  group path, and must not overwrite an existing app config.
 - `validate` recursively scans the configured `appsDir` and checks config
   fields, safe relative paths, source directories, and setup files. Invalid
   applications produce a non-zero exit status.
 - `build` and `validate` print one detail line per failed application followed
-  by a count summary. Successful and skipped apps do not receive individual
-  lines. Any application failure produces a non-zero exit status.
+  by a count summary. Build successes may use one concise check line; unchanged
+  and missing targets are aggregated. Any application failure produces a
+  non-zero exit status.
+- `build` fingerprints configuration, source names/content, and packaging-tool
+  identity. It skips only when the versioned cache matches and every recorded
+  artifact still exists. `--force` bypasses the match and updates the cache;
+  `--no-cache` bypasses cache reads and writes. Failed builds do not update it.
+- `list` and `show` expose workspace/app inspection and offer JSON where
+  applicable. `unpack` accepts app/group targets or direct `.intunewin` paths,
+  isolates decoder side effects in a temporary directory, and securely extracts
+  its decoded ZIP result.
+- With no arguments, an interactive terminal opens the TUI; non-interactive
+  invocation prints help. `tui` opens it explicitly. Every TUI action must have
+  a non-interactive CLI command/flag equivalent. The TUI intentionally excludes
+  delete, rename, and raw config editing.
+- `setup` initializes the config and directories and creates a valid PowerShell
+  example unless `--no-example` is used. `doctor` performs read-only workspace
+  checks. A missing config encountered during interactive TUI startup launches
+  setup rather than returning an unassisted file error.
+- `update` works outside a workspace. `--check` never installs, `--yes` permits
+  non-interactive installation, and `--json` is check-only and never prompts.
+  The CLI and TUI share a per-user update cache and make at most one automatic
+  GitHub check per 24 hours. Ordinary check failures stay silent, automatic
+  checks never affect command success, and `INPAKKER_NO_UPDATE_CHECK=1` disables
+  them. Installation always re-fetches release metadata and verifies the signed
+  checksum before replacing the executable.
 
 When changing path or discovery behavior, cover absolute/relative paths,
 missing files, groups, nested apps, and platform-specific separators. Use
@@ -173,7 +224,7 @@ missing files, groups, nested apps, and platform-specific separators. Use
 
 The canonical definitions are in `types/types.go`:
 
-- Global: `intunewinapputil`, legacy `intuneWinAppUtilPath`,
+- Global: `intunewinapputil`, legacy `intuneWinAppUtilPath`, `decoderPath`,
   `defaultOutputDir`, `appsDir`, and `muteIntuneWinAppUtil`.
 - App: `name`, `displayName`, `source`, `setupFile`, `installCommand`,
   `uninstallCommand`, and optional `outputDir`.
@@ -197,7 +248,14 @@ for future use and are not part of the packaging invocation today.
 - Keep user output concise and consistent with the existing info, warning,
   failure, and summary messages. Use the shared console in `cmd/output.go`.
   Lip Gloss styling must degrade cleanly for redirected/non-interactive output;
-  never emit unconditional ANSI sequences. Do not add emoji status markers.
+  never emit unconditional ANSI sequences. Use `✓`, `!`, `X`, and `-` as the
+  standard success, warning, failure, and skipped/current markers; do not add
+  emoji status markers.
+- Invocation and flag errors must include command usage. Operational errors
+  must remain concise and must not dump usage. Interactive prompts require a
+  terminal and must have flag-based, `--no-input` alternatives. JSON output
+  must never prompt or animate. Use Huh for forms and the shared CLI progress
+  model for long, measurable work.
 - Use standard-library functionality unless a dependency provides a clear
   benefit. Run `go mod tidy` after intentionally changing dependencies and
   include both `go.mod` and `go.sum` changes.
@@ -213,6 +271,13 @@ Intune utility, while ordinary Go development commands may remain portable.
 Keep this file descriptive of the repository's actual workflow. If new tests,
 CI, release tooling, or architectural layers are added, revise the relevant
 sections rather than leaving stale instructions.
+
+Keep the README focused on released end-user behavior. Put full configuration
+and troubleshooting material under `docs/`; put development and release details
+in `CONTRIBUTING.md` or this file. Do not expose dependency versions or internal
+implementation details in the README unless an end user must act on them.
+When the active version branch changes, update Dependabot's `target-branch` in
+the same pull request so dependency updates continue to follow this workflow.
 
 ## Maintaining this file
 

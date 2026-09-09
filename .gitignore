@@ -34,4 +34,6 @@ go.work.sum
 # .vscode/
 
 # workspace folder (used for testing)
-workspace/
+/workspace/
+decoded/
+.inpakker-cache.json
