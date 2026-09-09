@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/types"
 )
 
@@ -52,7 +52,7 @@ func ValidateApp(cfg *types.AppConfig) error {
 	}
 	for _, path := range paths {
 		name, value := path.name, path.value
-		if value != "" && !isSafeRelativePath(value) {
+		if value != "" && !pathutil.IsSafeRelative(value) {
 			messages = append(messages, fmt.Sprintf("%s must be a relative path within the app directory", name))
 		}
 	}
@@ -61,12 +61,4 @@ func ValidateApp(cfg *types.AppConfig) error {
 		return errors.New(strings.Join(messages, "; "))
 	}
 	return nil
-}
-
-func isSafeRelativePath(path string) bool {
-	if filepath.IsAbs(path) {
-		return false
-	}
-	clean := filepath.Clean(path)
-	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }

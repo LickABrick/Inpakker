@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/LickABrick/inpakker/internal/config"
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/spf13/cobra"
 )
 
@@ -257,11 +258,7 @@ func pathWithin(root, name string) (string, error) {
 }
 
 func safeRelativePath(path string) bool {
-	if path == "" || filepath.IsAbs(path) {
-		return false
-	}
-	clean := filepath.Clean(path)
-	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	return pathutil.IsSafeRelative(path)
 }
 
 func isFile(path string) bool {

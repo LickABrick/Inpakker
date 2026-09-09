@@ -18,6 +18,7 @@ The Go module is `github.com/LickABrick/inpakker` and currently targets Go
 - `cmd/validate.go`: recursively validates application configs and inputs.
 - `cmd/output.go`: shared, terminal-aware command presentation.
 - `internal/config/`: JSON file loaders.
+- `internal/pathutil/`: cross-platform safe-relative-path validation.
 - `types/types.go`: JSON-backed global and application configuration types.
 - `README.md`: user-facing setup, workspace layout, and configuration reference.
 
