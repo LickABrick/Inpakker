@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/types"
 )
 
@@ -24,10 +25,10 @@ func ValidateGlobal(cfg *types.GlobalConfig) error {
 		return errors.New("global config is nil")
 	}
 	var messages []string
-	if cfg.AppsDir != "" && !isSafeRelativePath(cfg.AppsDir) {
+	if cfg.AppsDir != "" && !pathutil.IsSafeRelative(cfg.AppsDir) {
 		messages = append(messages, "appsDir must be a relative path within the workspace")
 	}
-	if cfg.DefaultOutputDir != "" && !isSafeRelativePath(cfg.DefaultOutputDir) {
+	if cfg.DefaultOutputDir != "" && !pathutil.IsSafeRelative(cfg.DefaultOutputDir) {
 		messages = append(messages, "defaultOutputDir must be a relative path within each app directory")
 	}
 	if len(messages) > 0 {
