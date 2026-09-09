@@ -88,3 +88,31 @@ Inpakker is a simple, standalone CLI tool that wraps Microsoft's `IntuneWinAppUt
 * Paths are relative to the location of the config files.
 * The global config (`inpakker.config.json`) **must** be in your workspace root.
 * Each app folder inside `appsDir` requires its own `app.config.json`.
+
+## Version
+
+Display the version embedded in a release build with:
+
+```shell
+inpakker --version
+```
+
+Local development builds report `dev`. Tagged releases use Semantic Versioning
+and are published on GitHub with a Windows AMD64 ZIP and a SHA-256 checksum
+manifest.
+
+## Releasing
+
+After merging a completed version branch into `master`, create and push an
+annotated Semantic Version tag from the release commit:
+
+```shell
+git switch master
+git pull --ff-only
+git tag -a v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
+```
+
+The release workflow rejects lightweight tags, invalid version tags, and tags
+whose commits are not contained in `master`. A valid tag runs the verification
+suite and publishes the GitHub Release automatically.

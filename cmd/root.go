@@ -1,6 +1,5 @@
 /*
 Copyright © 2025 LickABrick
-
 */
 package cmd
 
@@ -9,8 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 )
-
-
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -25,6 +22,11 @@ to quickly create a Cobra application.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	// Run: func(cmd *cobra.Command, args []string) { },
+}
+
+// SetVersion configures the version reported by Cobra's --version flag.
+func SetVersion(version string) {
+	rootCmd.Version = version
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -47,5 +49,3 @@ func init() {
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
-
-
