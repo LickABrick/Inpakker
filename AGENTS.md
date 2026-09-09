@@ -15,14 +15,16 @@ The Go module is `github.com/LickABrick/inpakker` and currently targets Go
 - `cmd/root.go`: root Cobra command and process exit behavior.
 - `cmd/build.go`: target discovery and invocation of `IntuneWinAppUtil.exe`.
 - `cmd/new.go`: scaffolds a new application directory and config.
-- `cmd/validate.go`: loads application configs and reports JSON validity.
+- `cmd/validate.go`: recursively validates application configs and inputs.
+- `cmd/output.go`: shared, terminal-aware command presentation.
 - `internal/config/`: JSON file loaders.
 - `types/types.go`: JSON-backed global and application configuration types.
 - `README.md`: user-facing setup, workspace layout, and configuration reference.
 
-There is currently no explicit test suite or checked-in example workspace.
-GitHub Actions runs compilation-based checks, and GoReleaser publishes tagged
-releases.
+Tests cover configuration validation, target discovery, command summaries,
+packaging failures, and scaffold safety. There is no checked-in example
+workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
+publishes tagged releases.
 
 ## Git workflow
 
@@ -146,18 +148,21 @@ them:
   `appsDir` and skips directories whose path ends in `.git`.
 - Named build targets are relative to `appsDir`. A target can be an app or a
   group containing apps as immediate child directories.
+- Target, source, setup, and output paths may not escape their documented roots.
 - An app's `outputDir` overrides the global `defaultOutputDir`; the fallback is
   `output`.
 - `intunewinapputil` is the documented global JSON key. The legacy
   `intuneWinAppUtilPath` key is also accepted as a fallback.
 - `muteIntuneWinAppUtil` controls whether the wrapped tool inherits stdout and
   stderr.
-- `new` currently scaffolds under the literal `apps/` directory and does not
-  read the global config.
-- `validate` currently scans only immediate children of the literal `apps/`
-  directory and checks that each config can be read and decoded as JSON. It does
-  not yet enforce required fields or return an error when individual configs are
-  invalid.
+- `new` scaffolds under the configured `appsDir`, accepts a single directory
+  name, and must not overwrite an existing app config.
+- `validate` recursively scans the configured `appsDir` and checks config
+  fields, safe relative paths, source directories, and setup files. Invalid
+  applications produce a non-zero exit status.
+- `build` and `validate` print one detail line per failed application followed
+  by a count summary. Successful and skipped apps do not receive individual
+  lines. Any application failure produces a non-zero exit status.
 
 When changing path or discovery behavior, cover absolute/relative paths,
 missing files, groups, nested apps, and platform-specific separators. Use
@@ -189,8 +194,9 @@ for future use and are not part of the packaging invocation today.
   command or passed to a helper. Existing package globals are not a requirement
   for new code.
 - Keep user output concise and consistent with the existing info, warning,
-  failure, and success messages. Consider non-interactive terminals and tests
-  before expanding ANSI color output.
+  failure, and summary messages. Use the shared console in `cmd/output.go`.
+  Lip Gloss styling must degrade cleanly for redirected/non-interactive output;
+  never emit unconditional ANSI sequences. Do not add emoji status markers.
 - Use standard-library functionality unless a dependency provides a clear
   benefit. Run `go mod tidy` after intentionally changing dependencies and
   include both `go.mod` and `go.sum` changes.
