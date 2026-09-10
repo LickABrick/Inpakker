@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/LickABrick/inpakker/internal/atomicfile"
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"os"
 	"path/filepath"
 )
 
 const (
-	FileName      = ".inpakker-cache.json"
+	FileName      = "build-cache.json"
 	currentSchema = 1
 )
 
@@ -19,7 +21,7 @@ type Entry struct {
 }
 
 type Cache struct {
-	Schema int              `json:"schema"`
+	Schema int              `json:"schemaVersion"`
 	Apps   map[string]Entry `json:"apps"`
 }
 
@@ -46,7 +48,7 @@ func Load(workspaceRoot string) (*Cache, error) {
 		return nil, fmt.Errorf("read build cache %q: %w (remove the file to rebuild it)", path, err)
 	}
 	if cache.Schema != currentSchema || cache.Apps == nil {
-		return empty(), nil
+		return nil, fmt.Errorf("unsupported build cache schemaVersion %d", cache.Schema)
 	}
 	return &cache, nil
 }
@@ -57,7 +59,14 @@ func (c *Cache) Current(key, fingerprint, appPath string) bool {
 		return false
 	}
 	for _, artifact := range entry.Artifacts {
-		info, err := os.Stat(filepath.Join(appPath, filepath.FromSlash(artifact)))
+		if !pathutil.ValidRelative(artifact) {
+			return false
+		}
+		path := filepath.Join(appPath, filepath.FromSlash(artifact))
+		if err := pathutil.Within(appPath, path); err != nil {
+			return false
+		}
+		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
 			return false
 		}
@@ -78,32 +87,8 @@ func (c *Cache) Set(key, fingerprint, appPath string, artifacts []string) error 
 	return nil
 }
 
-func (c *Cache) Save(workspaceRoot string) error {
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode build cache: %w", err)
-	}
-	data = append(data, '\n')
-	path := filepath.Join(workspaceRoot, FileName)
-	temporary, err := os.CreateTemp(workspaceRoot, ".inpakker-cache-*")
-	if err != nil {
-		return fmt.Errorf("create temporary build cache: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err = temporary.Chmod(0o644); err == nil {
-		_, err = temporary.Write(data)
-	}
-	if closeErr := temporary.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("write build cache: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace build cache: %w", err)
-	}
-	return nil
+func (c *Cache) Save(stateDirectory string) error {
+	return atomicfile.JSON(filepath.Join(stateDirectory, FileName), c, 0600)
 }
 
 func empty() *Cache {

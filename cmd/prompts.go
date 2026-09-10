@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/LickABrick/inpakker/internal/pathutil"
@@ -24,52 +23,33 @@ func runForm(cmd *cobra.Command, form *huh.Form) error {
 	return form.WithInput(cmd.InOrStdin()).WithOutput(cmd.ErrOrStderr()).WithAccessible(accessible).Run()
 }
 
-func promptNew(cmd *cobra.Command, options *workspace.CreateOptions) error {
-	return runForm(cmd, huh.NewForm(
-		huh.NewGroup(
-			huh.NewNote().Title("1 of 4 · Identity").Description("Choose the directory identifier and user-facing name."),
-			huh.NewInput().Title("Application name").Value(&options.Name).Validate(func(value string) error {
-				if !workspace.ValidAppName(value) {
-					return errors.New("use a valid Windows directory name")
-				}
-				return nil
-			}),
-			huh.NewInput().Title("Display name").Value(&options.DisplayName),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("2 of 4 · Organization"),
-			huh.NewInput().Title("Group").Description("Optional path below the applications directory").Value(&options.Group).Validate(func(value string) error {
-				if !workspace.ValidGroupName(value) {
-					return errors.New("use a relative path of valid Windows directory names")
-				}
-				return nil
-			}),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("3 of 4 · Package source"),
-			huh.NewInput().Title("Source directory").Value(&options.Source).Validate(safeOptionalPath),
-			huh.NewInput().Title("Setup file").Value(&options.SetupFile).Validate(func(value string) error {
-				if strings.TrimSpace(value) == "" {
-					return errors.New("setup file is required")
-				}
-				return safeOptionalPath(value)
-			}),
-			huh.NewInput().Title("Output directory").Value(&options.OutputDir).Validate(safeOptionalPath),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("4 of 4 · Review").DescriptionFunc(func() string {
-				display := options.DisplayName
-				if display == "" {
-					display = options.Name
-				}
-				group := options.Group
-				if group == "" {
-					group = "—"
-				}
-				return fmt.Sprintf("Name          %s\nDisplay       %s\nGroup         %s\nSource        %s\nSetup         %s\nOutput        %s", options.Name, display, group, options.Source, options.SetupFile, options.OutputDir)
-			}, options),
-		),
-	))
+func promptNew(cmd *cobra.Command, ws *workspace.Workspace, options *workspace.CreateOptions) error {
+	groups, err := ws.Groups()
+	if err != nil {
+		return err
+	}
+	choices := []huh.Option[string]{huh.NewOption("No group", "")}
+	for _, group := range groups {
+		choices = append(choices, huh.NewOption(group, group))
+	}
+	choices = append(choices, huh.NewOption("+ Create new group…", "__new__"))
+	newGroup := ""
+	if options.DirectoryName == "" {
+		options.DirectoryName = workspace.Slug(options.Name)
+	}
+	err = runForm(cmd, huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Name").Value(&options.Name).Validate(huh.ValidateNotEmpty()),
+		huh.NewInput().Title("Directory name").Description("Leave empty to generate from Name").Value(&options.DirectoryName),
+		huh.NewSelect[string]().Title("Group").Options(choices...).Value(&options.Group),
+		huh.NewInput().Title("New group (when selected)").Value(&newGroup),
+		huh.NewInput().Title("Setup file").Value(&options.SetupFile).Validate(huh.ValidateNotEmpty()),
+		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", ws.Config.SourceDirectory, ws.Config.OutputDirectory)),
+		huh.NewNote().Title("Create application").Next(true).NextLabel("Create application"),
+	)))
+	if options.Group == "__new__" {
+		options.Group = newGroup
+	}
+	return err
 }
 
 func promptApplications(cmd *cobra.Command, ws *workspace.Workspace, title string, multiple bool, requirePackage bool) ([]string, error) {

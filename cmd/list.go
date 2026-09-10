@@ -16,7 +16,7 @@ func newListCmd() *cobra.Command {
 		Use:   "list [app-name|group-name...]",
 		Short: "List applications and their status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ws, err := workspace.Open(".")
+			ws, err := resolveWorkspace(cmd)
 			if err != nil {
 				return err
 			}

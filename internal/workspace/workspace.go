@@ -6,14 +6,16 @@ import (
 	"path/filepath"
 
 	"github.com/LickABrick/inpakker/internal/config"
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/types"
 )
 
-const ConfigFile = "inpakker.config.json"
+const ConfigFile = "inpakker.workspace.json"
 
 type Workspace struct {
 	Root   string
-	Config types.GlobalConfig
+	Config types.WorkspaceConfig
+	User   types.UserConfig
 }
 
 func Open(root string) (*Workspace, error) {
@@ -21,30 +23,34 @@ func Open(root string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
-	cfg, err := config.LoadGlobalConfig(filepath.Join(absRoot, ConfigFile))
+	cfg, err := config.LoadWorkspace(filepath.Join(absRoot, ConfigFile))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("workspace is not initialized; run 'inpakker setup': %w", err)
+			return nil, fmt.Errorf("workspace unavailable; use 'inpakker workspace create' or 'workspace add': %w", err)
 		}
-		return nil, fmt.Errorf("load global config: %w", err)
+		return nil, fmt.Errorf("load workspace configuration: %w", err)
 	}
-	if err := config.ValidateGlobal(cfg); err != nil {
-		return nil, fmt.Errorf("validate global config: %w", err)
+	if err := config.ValidateWorkspace(cfg); err != nil {
+		return nil, fmt.Errorf("validate workspace configuration: %w", err)
 	}
-	return &Workspace{Root: absRoot, Config: *cfg}, nil
+	user, err := config.LoadUser()
+	if err != nil {
+		return nil, err
+	}
+	return &Workspace{Root: absRoot, Config: *cfg, User: *user}, nil
 }
 
 func (w *Workspace) AppsDir() string {
-	dir := w.Config.AppsDir
+	dir := w.Config.ApplicationsDirectory
 	if dir == "" {
 		dir = "apps"
 	}
-	return filepath.Join(w.Root, dir)
+	return filepath.Join(w.Root, pathutil.Native(dir))
 }
 
 func (w *Workspace) DefaultOutputDir() string {
-	if w.Config.DefaultOutputDir != "" {
-		return w.Config.DefaultOutputDir
+	if w.Config.OutputDirectory != "" {
+		return w.Config.OutputDirectory
 	}
 	return "output"
 }
@@ -66,4 +72,18 @@ func EnsureFile(path, label string) error {
 		return fmt.Errorf("%s %q is a directory", label, path)
 	}
 	return nil
+}
+
+func (w *Workspace) Effective(app types.AppConfig) types.EffectiveAppConfig {
+	return config.EffectiveApp(w.Config, app)
+}
+func (w *Workspace) CacheDirectory() (string, error) {
+	if !config.ValidUUID(w.Config.ID) {
+		return "", fmt.Errorf("workspace id must be a UUID")
+	}
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "state", "workspaces", w.Config.ID), nil
 }

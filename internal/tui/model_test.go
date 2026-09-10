@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/LickABrick/inpakker/internal/packager"
 	"github.com/LickABrick/inpakker/internal/updater"
 	"github.com/LickABrick/inpakker/internal/workspace"
@@ -25,18 +26,29 @@ func (noOpRunner) Run(context.Context, string, []string, io.Writer, io.Writer) e
 
 func testWorkspace(t *testing.T) *workspace.Workspace {
 	t.Helper()
+	t.Setenv("INPAKKER_HOME", t.TempDir())
 	root := t.TempDir()
 	utility := filepath.Join(root, "IntuneWinAppUtil.exe")
-	if err := os.WriteFile(utility, []byte("test utility"), 0o755); err != nil {
+	if err := os.WriteFile(utility, []byte("utility"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	result, err := workspace.Initialize(workspace.SetupOptions{
-		Root: root, AppsDir: "apps", OutputDir: "output", IntuneWinAppUtil: utility, CreateExample: true,
-	})
-	if err != nil {
-		t.Fatalf("initialize workspace: %v", err)
+	user := config.DefaultUser()
+	user.Tools.ContentPrepTool.Path = utility
+	if err := config.SaveUser(&user); err != nil {
+		t.Fatal(err)
 	}
-	return result.Workspace
+	ws, err := workspace.CreateWorkspace(workspace.CreateWorkspaceOptions{Root: root, Name: "Test workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ws.Create(workspace.CreateOptions{Name: "Example", SetupFile: "install.ps1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ref.Path, "source", "install.ps1"), []byte("Write-Host example"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return ws
 }
 
 func newTestModel(t *testing.T) Model {
@@ -46,6 +58,11 @@ func newTestModel(t *testing.T) Model {
 	if err != nil {
 		t.Fatalf("New returned %v", err)
 	}
+	views, err := inspectApplications(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.apps.refresh(views, "")
 	model.resize(120, 32)
 	return model
 }
@@ -54,14 +71,15 @@ func press(value string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: rune(value[0]), Text: value}
 }
 
-func TestNewMissingWorkspaceStartsSetupWizard(t *testing.T) {
+func TestNewMissingWorkspaceShowsOnboarding(t *testing.T) {
+	t.Setenv("INPAKKER_HOME", t.TempDir())
 	root := t.TempDir()
 	model, err := New(context.Background(), root, nil, noOpRunner{}, nil, "dev")
 	if err != nil {
 		t.Fatalf("New returned %v", err)
 	}
-	if model.modal != ModalSetup || model.form == nil || model.workspace != nil {
-		t.Fatalf("missing workspace did not open setup: modal=%v form=%v", model.modal, model.form != nil)
+	if model.modal != ModalNone || model.form != nil || model.workspace != nil {
+		t.Fatalf("missing workspace did not show onboarding: modal=%v form=%v", model.modal, model.form != nil)
 	}
 }
 
@@ -143,7 +161,7 @@ func TestModalAndFormOwnGlobalKeys(t *testing.T) {
 
 func TestSelectionRemainsStableAfterRefresh(t *testing.T) {
 	model := newTestModel(t)
-	ref, err := model.workspace.Create(workspace.CreateOptions{Name: "second", Source: "source", SetupFile: "setup.exe", OutputDir: "output"})
+	ref, err := model.workspace.Create(workspace.CreateOptions{Name: "second", SourceDirectory: "source", SetupFile: "setup.exe", OutputDirectory: "output"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +217,7 @@ func TestResponsiveShellDoesNotOverflow(t *testing.T) {
 func TestEmptyAndNoMatchStates(t *testing.T) {
 	theme := NewTheme(true)
 	page := newApplicationsPage(theme)
-	model := Model{width: 100, height: 28, theme: theme, apps: page}
+	model := Model{width: 100, height: 28, theme: theme, apps: page, workspace: &workspace.Workspace{}}
 	if view := model.applicationsView(96); !strings.Contains(view, "No applications yet") {
 		t.Fatalf("empty view = %q", view)
 	}
@@ -226,7 +244,7 @@ func TestApplicationRowsRenderIndependentStatesAndPackageCount(t *testing.T) {
 	valid := workspace.App{Status: "valid", Config: &types.AppConfig{Name: "Firefox"}, Packages: []string{"one", "two"}}
 	invalid := workspace.App{Status: "invalid", Config: &types.AppConfig{Name: "Reader"}}
 	wide := applicationRow(ApplicationView{App: valid, Group: "Browsers", Build: packager.BuildInspection{State: packager.BuildStateCurrent}}, 120)
-	if strings.Join(wide, "|") != "Firefox|Browsers|✓ Valid|✓ Current|2" {
+	if strings.Join(wide, "|") != "Firefox|Browsers|✓ Valid|✓ Up to date|2" {
 		t.Fatalf("wide row = %#v", wide)
 	}
 	for _, state := range []packager.BuildState{packager.BuildStateNotBuilt, packager.BuildStateNeedsBuild} {
@@ -267,7 +285,7 @@ func TestMultiplePackagesOpenSelectionDialog(t *testing.T) {
 	if err := os.WriteFile(decoder, []byte("decoder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	model.workspace.Config.DecoderPath = decoder
+	model.workspace.User.Tools.Decoder.Path = decoder
 	app := model.apps.all[0]
 	output := filepath.Join(app.App.Ref.Path, "output")
 	if err := os.MkdirAll(output, 0o755); err != nil {
@@ -373,32 +391,33 @@ func TestCancelledCreateDoesNotWriteFiles(t *testing.T) {
 	model.beginCreate()
 	model.create.Name = "cancelled"
 	model.create.SetupFile = "setup.exe"
-	model.createConfirmed = false
-	updated, _ := model.completeForm(nil)
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
 	if model.modal != ModalNone {
 		t.Fatalf("cancel left modal %v open", model.modal)
 	}
-	path := filepath.Join(model.workspace.AppsDir(), "cancelled", "app.config.json")
+	path := filepath.Join(model.workspace.AppsDir(), "cancelled", "inpakker.app.json")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("cancelled wizard created %q: %v", path, err)
 	}
 }
 
-func TestCancelledSetupDoesNotInitializeWorkspace(t *testing.T) {
+func TestCancelledWorkspaceCreateDoesNotWrite(t *testing.T) {
+	t.Setenv("INPAKKER_HOME", t.TempDir())
 	root := t.TempDir()
 	model, err := New(context.Background(), root, nil, noOpRunner{}, nil, "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.setupConfirmed = false
-	updated, _ := model.completeForm(nil)
+	model.beginWorkspaceCreate()
+	model.workspaceDraft.Root = root
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
-	if model.modal != ModalNone || model.workspace != nil {
-		t.Fatalf("cancelled setup state: modal=%v workspace=%v", model.modal, model.workspace)
+	if model.workspace != nil || model.modal != ModalNone {
+		t.Fatal("cancel failed")
 	}
 	if _, err := os.Stat(filepath.Join(root, workspace.ConfigFile)); !os.IsNotExist(err) {
-		t.Fatalf("cancelled setup created a config: %v", err)
+		t.Fatal("cancel created config")
 	}
 }
 
@@ -427,7 +446,7 @@ func TestHelpContainsGlobalActionsAndFitsNarrowTerminal(t *testing.T) {
 	model.resize(70, 24)
 	model.modal, model.modalTitle = ModalHelp, "Keyboard shortcuts"
 	content := ansi.Strip(model.helpContent())
-	if !strings.Contains(content, "build all") || !strings.Contains(content, "update") || strings.Contains(content, "…") {
+	if !strings.Contains(content, "build all") || !strings.Contains(content, "about") || strings.Contains(content, "…") {
 		t.Fatalf("narrow help content = %q", content)
 	}
 	view := model.View().Content
@@ -438,17 +457,6 @@ func TestHelpContainsGlobalActionsAndFitsNarrowTerminal(t *testing.T) {
 	}
 	if got := len(strings.Split(view, "\n")); got > 24 {
 		t.Fatalf("help rendered %d lines", got)
-	}
-}
-
-func TestWizardReviewSummaries(t *testing.T) {
-	create := createReview(workspace.CreateOptions{Name: "browser", DisplayName: "Browser", Group: "Productivity", Source: "source", SetupFile: "setup.exe", OutputDir: "output"})
-	if !strings.Contains(create, "Browser") || !strings.Contains(create, "setup.exe") {
-		t.Fatalf("create review = %q", create)
-	}
-	setup := setupReview(workspace.SetupOptions{Root: `C:\\Packages`, AppsDir: "apps", OutputDir: "output"})
-	if !strings.Contains(setup, `C:\\Packages`) || !strings.Contains(setup, "Configure later") {
-		t.Fatalf("setup review = %q", setup)
 	}
 }
 
@@ -468,7 +476,7 @@ func TestWizardValidatorsRejectUnsafeOrMissingValues(t *testing.T) {
 	}
 	model := newTestModel(t)
 	model.beginCreate()
-	if model.modal != ModalNewApplication || model.form == nil || model.create.Source != "source" || model.create.OutputDir != "output" {
+	if model.modal != ModalNewApplication || model.form == nil || model.create.SourceDirectory != "" || model.create.OutputDirectory != "" {
 		t.Fatalf("new wizard was not initialized: modal=%v options=%#v", model.modal, model.create)
 	}
 }

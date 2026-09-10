@@ -5,13 +5,18 @@ import (
 )
 
 type KeyMap struct {
+	Workspaces, Settings, About, Folder                                                           key.Binding
 	Up, Down, PageUp, PageDown, Open, Back, Escape, Search, NewApp, Build, BuildAll, BuildOptions key.Binding
-	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Update, Refresh                        key.Binding
+	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Refresh                                key.Binding
 	Help, Quit, Cancel, Logs                                                                      key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
+		Workspaces:   binding([]string{"w"}, "w", "workspaces"),
+		Settings:     binding([]string{"s"}, "s", "settings"),
+		About:        binding([]string{"i"}, "i", "about"),
+		Folder:       binding([]string{"o"}, "o", "folder"),
 		Up:           binding([]string{"up", "k"}, "↑/k", "up"),
 		Down:         binding([]string{"down", "j"}, "↓/j", "down"),
 		PageUp:       binding([]string{"pgup"}, "pgup", "page up"),
@@ -29,7 +34,6 @@ func DefaultKeyMap() KeyMap {
 		Unpack:       binding([]string{"u"}, "u", "unpack"),
 		UnpackAll:    binding([]string{"ctrl+u"}, "ctrl+u", "unpack all"),
 		Diagnostics:  binding([]string{"d"}, "d", "diagnostics"),
-		Update:       binding([]string{"U"}, "U", "update"),
 		Refresh:      binding([]string{"r"}, "r", "refresh"),
 		Help:         binding([]string{"?"}, "?", "help"),
 		Quit:         binding([]string{"q", "ctrl+c"}, "q", "quit"),

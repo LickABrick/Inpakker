@@ -2,12 +2,16 @@ package workspace
 
 import (
 	"fmt"
+	"github.com/LickABrick/inpakker/internal/config"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/LickABrick/inpakker/internal/pathutil"
 )
+
+const AppConfigFile = "inpakker.app.json"
 
 type AppRef struct {
 	Path     string `json:"path"`
@@ -32,6 +36,11 @@ func (w *Workspace) Discover(names []string, all bool) (Selection, error) {
 	}
 
 	appsRoot := w.AppsDir()
+	if _, err := os.Stat(appsRoot); err == nil {
+		if err := pathutil.Within(w.Root, appsRoot); err != nil {
+			return selection, err
+		}
+	}
 	if all {
 		if _, err := os.Stat(appsRoot); os.IsNotExist(err) {
 			return selection, nil
@@ -46,7 +55,7 @@ func (w *Workspace) Discover(names []string, all bool) (Selection, error) {
 			if info.Name() == ".git" {
 				return filepath.SkipDir
 			}
-			if current != filepath.Clean(appsRoot) && isFile(filepath.Join(current, "app.config.json")) {
+			if current != filepath.Clean(appsRoot) && isFile(filepath.Join(current, "inpakker.app.json")) {
 				add(current)
 				return filepath.SkipDir
 			}
@@ -56,34 +65,53 @@ func (w *Workspace) Discover(names []string, all bool) (Selection, error) {
 			return Selection{}, fmt.Errorf("scan applications directory: %w", err)
 		}
 	} else {
+		inventory, err := w.Discover(nil, true)
+		if err != nil {
+			return selection, err
+		}
 		for _, name := range names {
 			candidate, err := w.targetPath(name)
 			if err != nil {
 				selection.Skipped = append(selection.Skipped, name)
 				continue
 			}
-			info, err := os.Stat(candidate)
-			if err != nil || !info.IsDir() {
-				selection.Skipped = append(selection.Skipped, name)
-				continue
-			}
-			if isFile(filepath.Join(candidate, "app.config.json")) {
-				add(candidate)
-				continue
-			}
-			entries, err := os.ReadDir(candidate)
-			if err != nil {
-				selection.Skipped = append(selection.Skipped, name)
-				continue
-			}
-			found := false
-			for _, entry := range entries {
-				if entry.IsDir() && isFile(filepath.Join(candidate, entry.Name(), "app.config.json")) {
-					add(filepath.Join(candidate, entry.Name()))
-					found = true
+			exact := false
+			for _, ref := range inventory.Apps {
+				if strings.EqualFold(ref.Path, candidate) {
+					add(ref.Path)
+					exact = true
+					break
 				}
 			}
-			if !found {
+			if exact {
+				continue
+			}
+			var matches []AppRef
+			for _, ref := range inventory.Apps {
+				cfg, err := config.LoadAppConfig(filepath.Join(ref.Path, AppConfigFile))
+				if err == nil && strings.EqualFold(cfg.Name, name) {
+					matches = append(matches, ref)
+				}
+			}
+			if len(matches) > 1 {
+				var targets []string
+				for _, ref := range matches {
+					targets = append(targets, ref.Relative)
+				}
+				return Selection{}, fmt.Errorf("application %q is ambiguous: %s", name, strings.Join(targets, ", "))
+			}
+			if len(matches) == 1 {
+				add(matches[0].Path)
+				continue
+			}
+			for _, ref := range inventory.Apps {
+				rel, err := filepath.Rel(candidate, ref.Path)
+				if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					add(ref.Path)
+					exact = true
+				}
+			}
+			if !exact {
 				selection.Skipped = append(selection.Skipped, name)
 			}
 		}
@@ -111,13 +139,66 @@ func (w *Workspace) Find(name string) (AppRef, error) {
 }
 
 func (w *Workspace) targetPath(name string) (string, error) {
-	if !pathutil.IsSafeRelative(name) || filepath.Clean(name) == "." {
+	if !pathutil.ValidRelative(name) || filepath.Clean(name) == "." {
 		return "", fmt.Errorf("target %q must remain within the applications directory", name)
 	}
-	return filepath.Join(w.AppsDir(), filepath.Clean(name)), nil
+	return filepath.Join(w.AppsDir(), filepath.Clean(pathutil.Native(name))), nil
 }
 
 func isFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// Groups discovers directories once per inventory load, stopping at application roots.
+func (w *Workspace) Groups() ([]string, error) {
+	groups := []string{}
+	err := filepath.WalkDir(w.AppsDir(), func(path string, entry os.DirEntry, err error) error {
+		if os.IsNotExist(err) && path == w.AppsDir() {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".git" || isFile(filepath.Join(path, AppConfigFile)) {
+			return filepath.SkipDir
+		}
+		if path != w.AppsDir() {
+			groups = append(groups, w.Relative(path))
+		}
+		return nil
+	})
+	sort.Slice(groups, func(i, j int) bool { return naturalLess(groups[i], groups[j]) })
+	return groups, err
+}
+func naturalLess(a, b string) bool {
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	for len(a) > 0 && len(b) > 0 {
+		if a[0] >= '0' && a[0] <= '9' && b[0] >= '0' && b[0] <= '9' {
+			i, j := 0, 0
+			for i < len(a) && a[i] >= '0' && a[i] <= '9' {
+				i++
+			}
+			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
+				j++
+			}
+			an, bn := strings.TrimLeft(a[:i], "0"), strings.TrimLeft(b[:j], "0")
+			if len(an) != len(bn) {
+				return len(an) < len(bn)
+			}
+			if an != bn {
+				return an < bn
+			}
+			a, b = a[i:], b[j:]
+			continue
+		}
+		if a[0] != b[0] {
+			return a[0] < b[0]
+		}
+		a, b = a[1:], b[1:]
+	}
+	return len(a) < len(b)
 }

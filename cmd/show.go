@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +15,7 @@ func newShowCmd() *cobra.Command {
 		Short: "Show application details",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ws, err := workspace.Open(".")
+			ws, err := resolveWorkspace(cmd)
 			if err != nil {
 				return err
 			}
@@ -45,11 +44,11 @@ func newShowCmd() *cobra.Command {
 			if app.Error != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "Issue:       %s\n", app.Error)
 			}
-			if app.Config != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Display:     %s\n", app.Config.DisplayName)
-				fmt.Fprintf(cmd.OutOrStdout(), "Source:      %s\n", app.Config.Source)
+			if app.Effective != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Display:     %s\n", app.Config.Name)
+				fmt.Fprintf(cmd.OutOrStdout(), "Source:      %s\n", app.Effective.SourceDirectory)
 				fmt.Fprintf(cmd.OutOrStdout(), "Setup:       %s\n", app.Config.SetupFile)
-				fmt.Fprintf(cmd.OutOrStdout(), "Output:      %s\n", app.Config.OutputDir)
+				fmt.Fprintf(cmd.OutOrStdout(), "Output:      %s\n", app.Effective.OutputDirectory)
 			}
 			if len(app.Packages) > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "Packages:    %s\n", strings.Join(app.Packages, ", "))

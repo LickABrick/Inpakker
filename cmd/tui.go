@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"os"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LickABrick/inpakker/internal/process"
@@ -24,9 +23,9 @@ func newTUICmd(runner process.Runner) *cobra.Command {
 }
 
 func runTUI(cmd *cobra.Command, runner process.Runner) error {
-	ws, err := workspace.Open(".")
-	if errors.Is(err, os.ErrNotExist) && interactive(cmd) {
-		// A missing workspace is handled by the staged setup flow inside the TUI.
+	ws, err := resolveWorkspace(cmd)
+	if errors.Is(err, workspace.ErrNoWorkspace) {
+		// First launch opens the workspace manager.
 		ws, err = nil, nil
 	}
 	if err != nil {

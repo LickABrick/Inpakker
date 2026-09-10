@@ -32,7 +32,7 @@ func (m Model) View() tea.View {
 
 func (m Model) tooSmallView() string {
 	width := max(20, m.width)
-	header := m.theme.TopBar.Width(width).Render(padBetween(m.theme.Brand.Render("INPAKKER"), m.theme.Version.Render(displayVersion(m.version)), width-2))
+	header := m.theme.TopBar.Width(width).Render(padBetween(m.theme.Brand.Render(m.branding()), "", width-2))
 	body := fmt.Sprintf("\n%s\n\nInpakker needs at least %d×%d characters for this view.\n\nCurrent size: %d×%d",
 		m.theme.PageTitle.Render("Terminal too small"), minimumWidth, minimumHeight, m.width, m.height)
 	return header + "\n" + lipgloss.NewStyle().Padding(0, 2).Render(body)
@@ -41,18 +41,13 @@ func (m Model) tooSmallView() string {
 func (m Model) shellView() string {
 	width := max(minimumWidth, m.width)
 	inner := max(20, width-4)
-	brand := m.theme.Brand.Render("INPAKKER")
-	right := m.theme.Version.Render(displayVersion(m.version))
-	if m.updateResult.Available {
-		update := m.theme.Update.Render("Update v" + m.updateResult.LatestVersion + " available")
-		if width >= 76 {
-			right = update + "   " + right
-		} else if width >= 66 {
-			right = update
-		}
+	brand := m.theme.Brand.Render(m.branding())
+	right := ""
+	if m.workspace != nil {
+		right = m.theme.Text.Render(m.workspace.Config.Name)
 	}
 	top := m.theme.TopBar.Width(width).Render(padBetween(brand, right, width-2))
-	workspaceLabel := "No workspace"
+	workspaceLabel := "No workspace selected"
 	if m.workspace != nil {
 		workspaceLabel = m.workspace.Root
 	}
@@ -60,16 +55,34 @@ func (m Model) shellView() string {
 	if width >= 74 && m.workspace != nil {
 		workspaceRight = fmt.Sprintf("%d %s", len(m.apps.all), pluralWord(len(m.apps.all), "application", "applications"))
 	}
+	if m.refreshing {
+		workspaceRight = m.spinner.View() + " Refreshing…  " + workspaceRight
+	}
+	if m.detecting {
+		workspaceRight = m.spinner.View() + " Detecting tools…  " + workspaceRight
+	}
+	if m.checkingUpdate {
+		workspaceRight = m.spinner.View() + " Checking for updates…  " + workspaceRight
+	}
+	if m.updateResult.Available {
+		workspaceRight = "↑ Update v" + m.updateResult.LatestVersion + " available · i About"
+	}
 	contextLine := m.theme.WorkspaceBar.Width(width).Render(padBetween(ansi.Truncate(workspaceLabel, max(15, width-lipgloss.Width(workspaceRight)-6), "…"), workspaceRight, width-2))
 	separator := m.theme.HorizontalSeparator.Render(strings.Repeat("─", width))
 	contentWidth := max(20, inner-4)
-	page := lipgloss.NewStyle().Width(inner).Height(max(5, m.height-5)).Padding(1, 2).Render(m.pageView(contentWidth, max(5, m.height-7)))
+	page := lipgloss.NewStyle().Width(inner).Height(max(5, m.height-6)).Padding(0, 2).Render(m.pageView(contentWidth, max(5, m.height-6)))
 	footer := lipgloss.NewStyle().Width(width).Padding(0, 1).Render(m.footerView(width - 2))
 	return strings.Join([]string{top, contextLine, separator, page, separator, footer}, "\n")
 }
 
 func (m Model) pageView(width, height int) string {
 	switch m.currentRoute().Kind {
+	case RouteAbout:
+		return m.aboutView(width)
+	case RouteWorkspaces:
+		return m.workspacesView(width, height)
+	case RouteSettings:
+		return m.settingsView(width, height)
 	case RouteApplication:
 		viewport := m.detailViewport
 		viewport.SetWidth(width)
@@ -88,6 +101,10 @@ func (m Model) pageView(width, height int) string {
 }
 
 func (m Model) applicationsView(width int) string {
+	if m.workspace == nil {
+		return lipgloss.Place(width, max(6, m.height-10), lipgloss.Center, lipgloss.Center,
+			m.theme.PageTitle.Render("No workspace selected")+"\n\nCreate a new packaging workspace or add an existing one.\n\n[ n ] Create workspace\n[ a ] Add existing workspace")
+	}
 	var output strings.Builder
 	output.WriteString(m.theme.PageTitle.Render("Applications"))
 	output.WriteString("\n\n")
@@ -123,8 +140,8 @@ func (m Model) applicationView(width int) string {
 	}
 	status := m.styleValidation(app.App)
 	display := app.App.Label()
-	if app.App.Config != nil && strings.TrimSpace(app.App.Config.DisplayName) != "" {
-		display = app.App.Config.DisplayName
+	if app.App.Config != nil && strings.TrimSpace(app.App.Config.Name) != "" {
+		display = app.App.Config.Name
 	}
 	heading := m.theme.Breadcrumb.Render("Applications / "+app.App.Label()) + "\n\n" +
 		m.theme.PageTitle.Render(app.App.Label()) + "\n" + padBetween(m.theme.TextMuted.Render(display), status, width)
@@ -145,11 +162,11 @@ func (m Model) applicationView(width int) string {
 	cfg := app.App.Config
 	configLines := []string{
 		m.theme.PanelTitle.Render("Configuration"),
-		keyValue("Display name", cfg.DisplayName, 18),
+		keyValue("Directory", app.App.Ref.Relative, 18),
 		keyValue("Group", app.Group, 18),
-		keyValue("Source", cfg.Source, 18),
+		keyValue("Source directory", inheritedLabel(app.App.Effective.SourceDirectory, app.App.Effective.SourceInherited), 18),
 		keyValue("Setup file", cfg.SetupFile, 18),
-		keyValue("Output directory", outputDirectory(cfg.OutputDir, m.workspace.DefaultOutputDir()), 18),
+		keyValue("Output directory", inheritedLabel(app.App.Effective.OutputDirectory, app.App.Effective.OutputInherited), 18),
 	}
 	configPanel := m.theme.Panel.Render(strings.Join(configLines, "\n"))
 	panels := packagePanel + "\n\n" + configPanel
@@ -166,7 +183,7 @@ func (m Model) applicationView(width int) string {
 		}
 		panels += "\n\n" + m.theme.PageTitle.Render("Package") + "\n\n" + strings.Join(packages, "\n\n")
 	}
-	if strings.TrimSpace(m.workspace.Config.DecoderPath) == "" {
+	if strings.TrimSpace(m.workspace.User.Tools.Decoder.Path) == "" {
 		panels += "\n\n" + m.theme.StatusMuted.Render("— Unpack unavailable: decoder is not configured")
 	}
 	return heading + "\n\n" + panels
@@ -266,11 +283,17 @@ func (m Model) footerView(width int) string {
 		}
 		return m.help.View(bindings)
 	}
-	if m.apps.searching {
+	if m.apps.searching && m.currentRoute().Kind == RouteApplications {
 		bindings.short = []key.Binding{m.keys.Up, m.keys.Down, m.keys.Open, binding(m.keys.Escape.Keys(), "esc", "clear search")}
 		return m.help.View(bindings)
 	}
 	switch m.currentRoute().Kind {
+	case RouteAbout:
+		bindings.short = []key.Binding{binding([]string{"c"}, "c", "check updates"), binding([]string{"u"}, "u", "install update"), m.keys.Back}
+	case RouteWorkspaces:
+		bindings.short = []key.Binding{m.keys.Open, m.keys.NewApp, binding([]string{"a"}, "a", "add"), binding([]string{"r"}, "r", "relink"), binding([]string{"x"}, "x", "remove"), m.keys.Search, m.keys.Back}
+	case RouteSettings:
+		bindings.short = []key.Binding{binding([]string{"enter"}, "enter", "edit"), binding([]string{"d"}, "d", "detect"), binding([]string{"I"}, "I", "install tool"), binding([]string{"a"}, "a", "use detected"), binding([]string{"x"}, "x", "clear"), m.keys.Back}
 	case RouteApplications:
 		if width < 80 {
 			bindings.short = []key.Binding{m.keys.Open, m.keys.Search, m.keys.NewApp, m.keys.Help, m.keys.Quit}
@@ -283,7 +306,7 @@ func (m Model) footerView(width int) string {
 			if app.App.Status != "valid" {
 				build = binding(build.Keys(), "b", "build unavailable")
 			}
-			if m.workspace == nil || strings.TrimSpace(m.workspace.Config.DecoderPath) == "" || len(app.App.Packages) == 0 {
+			if m.workspace == nil || strings.TrimSpace(m.workspace.User.Tools.Decoder.Path) == "" || len(app.App.Packages) == 0 {
 				unpack = binding(unpack.Keys(), "u", "unpack unavailable")
 			}
 		}
@@ -295,12 +318,21 @@ func (m Model) footerView(width int) string {
 	default:
 		bindings.short = []key.Binding{m.keys.Up, m.keys.Down, m.keys.Open, m.keys.Back, m.keys.Help}
 	}
+	if m.workspace == nil && m.currentRoute().Kind == RouteApplications {
+		bindings.short = []key.Binding{binding([]string{"n"}, "n", "create"), binding([]string{"a"}, "a", "add"), m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Help}
+	}
+	if m.folderTarget() != "" {
+		bindings.short = append([]key.Binding{m.keys.Folder}, bindings.short...)
+	}
 	return m.help.View(bindings)
 }
 
 func (m Model) modalView() string {
 	if m.operation != nil {
 		return m.progressModalView()
+	}
+	if m.picking {
+		return m.dialog("Choose path", m.picker.View()+"\n↑↓ select · → enter directory · enter choose · esc back to form")
 	}
 	var body string
 	switch m.modal {
@@ -310,7 +342,7 @@ func (m Model) modalView() string {
 		viewport.SetHeight(max(4, min(14, m.height-10)))
 		viewport.SetContent(m.helpContent())
 		body = viewport.View()
-	case ModalNewApplication, ModalSetup, ModalBuildOptions, ModalPackageSelect, ModalUpdate:
+	case ModalNewApplication, ModalWorkspaceForm, ModalBuildOptions, ModalPackageSelect, ModalUpdate, ModalSetting, ModalTool:
 		if m.form != nil {
 			body = m.form.View()
 		}
@@ -341,14 +373,14 @@ func (m Model) helpContent() string {
 func (m Model) progressModalView() string {
 	current := m.operation.current
 	total := max(1, current.total)
-	percent := float64(current.current) / float64(total)
+	percent := float64(current.completed) / float64(total)
 	elapsed := time.Since(m.operation.started).Round(time.Second)
-	body := m.progress.ViewAs(percent) + fmt.Sprintf("  %d / %d", current.current, current.total) + "\n\n" +
+	body := m.progress.ViewAs(percent) + fmt.Sprintf("  %d of %d", current.current, current.total) + "\n\n" +
 		m.spinner.View() + " " + titleCase(current.phase)
 	if current.label != "" {
 		body += "\n" + m.theme.TextMuted.Render(current.label)
 	}
-	body += "\n\n" + m.theme.TextMuted.Render(elapsed.String()+" elapsed") + "\n\n" + m.theme.Help.Render("ctrl+c cancel")
+	body += fmt.Sprintf("\n%d completed", current.completed) + "\n\n" + m.theme.TextMuted.Render(elapsed.String()+" elapsed") + "\n\n" + m.theme.Help.Render("ctrl+c cancel")
 	return m.dialog(m.operation.title, body)
 }
 
@@ -370,14 +402,14 @@ func (m Model) fullHelp() helpBindings {
 	if m.width < 100 {
 		return helpBindings{full: [][]key.Binding{
 			{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
-			{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Update, m.keys.Help, m.keys.Quit},
+			{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.Help, m.keys.Quit},
 		}}
 	}
 	return helpBindings{full: [][]key.Binding{
 		{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
 		{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack},
 		{m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh},
-		{m.keys.Update, m.keys.Help, m.keys.Quit},
+		{m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.Help, m.keys.Quit},
 	}}
 }
 
@@ -385,7 +417,7 @@ func modalContentWidth(terminalWidth int) int { return min(68, max(38, terminalW
 
 func modalInnerWidth(terminalWidth int) int { return max(32, modalContentWidth(terminalWidth)-6) }
 
-func formContentHeight(terminalHeight int) int { return max(6, min(18, terminalHeight-12)) }
+func formContentHeight(terminalHeight int) int { return max(6, terminalHeight-10) }
 
 func padBetween(left, right string, width int) string {
 	if right == "" {
@@ -433,13 +465,6 @@ func (m Model) styleBuild(state packager.BuildState) string {
 	}
 }
 
-func outputDirectory(value, fallback string) string {
-	if value != "" {
-		return value
-	}
-	return fallback
-}
-
 func pluralWord(count int, one, many string) string {
 	if count == 1 {
 		return one
@@ -481,4 +506,84 @@ func errorDetail(err error) string {
 		return strings.TrimSpace(text[index+1:])
 	}
 	return ""
+}
+
+func (m Model) branding() string {
+	if m.accessible {
+		return "INPAKKER"
+	}
+	return "📦 INPAKKER"
+}
+func (m Model) aboutView(width int) string {
+	state := "— Not checked"
+	if m.version == "dev" || m.version == "" {
+		state = "— Update installation unavailable for development builds"
+	} else if m.updateError != nil {
+		state = "! " + m.updateError.Error()
+	} else if m.updateResult.Available {
+		state = "↑ " + displayVersion(m.updateResult.LatestVersion) + " is available"
+	} else if !m.updateResult.CheckedAt.IsZero() {
+		state = "✓ You're up to date"
+	}
+	checked := "Never"
+	if !m.updateResult.CheckedAt.IsZero() {
+		checked = m.updateResult.CheckedAt.Local().Format("2006-01-02 15:04")
+	}
+	return ansi.Wrap("About Inpakker\n\n"+m.branding()+"\nPackage Win32 applications for Microsoft Intune.\n\nVersion\n"+displayVersion(m.version)+"\n\nUpdate\n"+state+"\nLast checked: "+checked+"\n\nProject\nLickABrick/Inpakker · github.com/LickABrick/Inpakker\n\nLicense\nMIT", width, "")
+}
+func (m Model) workspacesView(width, height int) string {
+	lines := []string{m.theme.PageTitle.Render("Workspaces"), ""}
+	if m.workspaceSearching {
+		lines = append(lines, m.workspaceSearch.View(), "")
+	}
+	views := m.filteredWorkspaces()
+	visible := max(1, height-len(lines)-3)
+	start := max(0, m.workspaceCursor-visible+1)
+	for i := start; i < min(len(views), start+visible); i++ {
+		view := views[i]
+		status := "✓ Ready"
+		if view.Status == "unavailable" {
+			status = "! Path unavailable"
+		}
+		if view.Status == "invalid" {
+			status = "X Invalid workspace"
+		}
+		prefix := "  "
+		if i == m.workspaceCursor {
+			prefix = "› "
+		}
+		line := prefix + view.Name + " · " + view.Path + " · " + status
+		lines = append(lines, ansi.Truncate(line, width, "…"))
+	}
+	if len(views) == 0 {
+		lines = append(lines, "No registered workspaces. Create a workspace or add an existing one.")
+	}
+	lines = append(lines, "", "n Create workspace · a Add existing workspace")
+	return strings.Join(lines, "\n")
+}
+func (m Model) settingsView(width, height int) string {
+	lines := []string{m.theme.PageTitle.Render("Settings"), ""}
+	rows := m.settingsRows()
+	visible := max(1, height-5)
+	start := max(0, m.settingCursor-visible+1)
+	for i := start; i < min(len(rows), start+visible); i++ {
+		row := rows[i]
+		prefix := "  "
+		if i == m.settingCursor {
+			prefix = "› "
+		}
+		value := row.value
+		if value == "" {
+			value = "! Not configured"
+		}
+		scope := "Global"
+		if row.scope == "workspace" {
+			scope = "Workspace"
+		}
+		if row.scope == "tool" {
+			scope = "External tools"
+		}
+		lines = append(lines, ansi.Truncate(prefix+scope+" · "+row.label+"   "+value, width, "…"))
+	}
+	return strings.Join(lines, "\n")
 }

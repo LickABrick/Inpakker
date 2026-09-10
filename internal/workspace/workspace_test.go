@@ -1,94 +1,143 @@
 package workspace
 
 import (
-	"encoding/json"
+	"github.com/LickABrick/inpakker/internal/config"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestInitializeCreatesValidPowerShellExample(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "workspace")
-	result, err := Initialize(SetupOptions{Root: root, AppsDir: "packages", OutputDir: "artifacts", CreateExample: true})
-	if err != nil {
-		t.Fatalf("Initialize returned %v", err)
-	}
-	if result.Example == nil {
-		t.Fatal("Initialize did not create an example")
-	}
-	app := result.Workspace.Inspect(*result.Example)
-	if app.Status != "valid" {
-		t.Fatalf("example status = %q: %s", app.Status, app.Error)
-	}
-	scriptPath := filepath.Join(result.Example.Path, "source", "install.ps1")
-	if contents, err := os.ReadFile(scriptPath); err != nil || len(contents) == 0 {
-		t.Fatalf("example script contents = %q, error = %v", contents, err)
-	}
-	data, err := os.ReadFile(filepath.Join(root, ConfigFile))
+func makeWorkspace(t *testing.T, name string) *Workspace {
+	t.Helper()
+	ws, err := CreateWorkspace(CreateWorkspaceOptions{Root: filepath.Join(t.TempDir(), name), Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var config map[string]any
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatal(err)
-	}
-	if config["appsDir"] != "packages" || config["defaultOutputDir"] != "artifacts" {
-		t.Fatalf("unexpected global config: %#v", config)
-	}
+	return ws
 }
-
-func TestDiagnoseReportsOptionalDecoderAsWarning(t *testing.T) {
-	root := t.TempDir()
-	utility := filepath.Join(root, "IntuneWinAppUtil.exe")
-	if err := os.WriteFile(utility, []byte("utility"), 0o644); err != nil {
+func TestWorkspaceLifecycleAndResolution(t *testing.T) {
+	t.Setenv("INPAKKER_HOME", t.TempDir())
+	t.Setenv("INPAKKER_WORKSPACE", "")
+	outside := t.TempDir()
+	if _, err := Resolve("", outside); err != ErrNoWorkspace {
 		t.Fatal(err)
 	}
-	if _, err := Initialize(SetupOptions{Root: root, IntuneWinAppUtil: utility, CreateExample: true}); err != nil {
-		t.Fatal(err)
-	}
-	checks := Diagnose(root)
-	for _, check := range checks {
-		if check.Name == "Decoder" && check.Status != CheckWarning {
-			t.Fatalf("decoder check = %#v", check)
-		}
-		if check.Status == CheckFailure {
-			t.Fatalf("unexpected failed check: %#v", check)
+	a := makeWorkspace(t, "ADS Groep")
+	b := makeWorkspace(t, "Hencon")
+	check := func(selector, cwd, id string) {
+		t.Helper()
+		ws, err := Resolve(selector, cwd)
+		if err != nil || ws.Config.ID != id {
+			t.Fatalf("resolve %q from %q: %v %#v", selector, cwd, err, ws)
 		}
 	}
+	check("", outside, b.Config.ID)
+	nested := filepath.Join(a.AppsDir(), "Browsers", "firefox", "source")
+	os.MkdirAll(nested, 0755)
+	check("", nested, a.Config.ID)
+	t.Setenv("INPAKKER_WORKSPACE", "Hencon")
+	check("", nested, b.Config.ID)
+	check("ADS Groep", nested, a.Config.ID)
+	t.Setenv("INPAKKER_WORKSPACE", "")
+	if _, err := Use("ADS Groep"); err != nil {
+		t.Fatal(err)
+	}
+	check("", outside, a.Config.ID)
+	if _, err := Add(a.Root); err == nil {
+		t.Fatal("duplicate add")
+	}
+	if err := Remove("ADS Groep"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, ConfigFile)); err != nil {
+		t.Fatal("remove deleted workspace", err)
+	}
+	check("", nested, a.Config.ID) // Unregistered discovery.
+	if _, err := Add(a.Root); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(a.Root, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := Relink(filepath.Base(a.Root), b.Root); err == nil {
+		t.Fatal("wrong UUID accepted")
+	}
+	if err := Relink(filepath.Base(a.Root), moved); err != nil {
+		t.Fatal(err)
+	}
+	check("ADS Groep", outside, a.Config.ID)
+	if _, err := CreateWorkspace(CreateWorkspaceOptions{Root: t.TempDir(), Name: "ads groep"}); err == nil {
+		t.Fatal("duplicate name")
+	}
 }
-
-func TestDiscoverAllAllowsMissingApplicationsDirectory(t *testing.T) {
-	ws := &Workspace{Root: t.TempDir()}
-	selection, err := ws.Discover(nil, true)
+func TestCreateApplicationInheritanceGroupsAndSafety(t *testing.T) {
+	t.Setenv("INPAKKER_HOME", t.TempDir())
+	ws := makeWorkspace(t, "Customer Apps")
+	ref, err := ws.Create(CreateOptions{Name: "Mozilla Firefox", Group: `Customer Apps\Legacy`, SetupFile: "Firefox Setup.exe"})
 	if err != nil {
-		t.Fatalf("Discover returned %v", err)
+		t.Fatal(err)
 	}
-	if len(selection.Apps) != 0 || len(selection.Skipped) != 0 {
-		t.Fatalf("Discover returned %#v, want empty selection", selection)
+	if ref.Relative != filepath.Join("Customer Apps", "Legacy", "mozilla-firefox") {
+		t.Fatal(ref)
 	}
-}
-
-func TestCreateSupportsGroupsAndRejectsEscapingPaths(t *testing.T) {
-	ws := &Workspace{Root: t.TempDir()}
-	ref, err := ws.Create(CreateOptions{Name: "example", Group: "team/tools", Source: "source", SetupFile: "setup.exe"})
-	if err != nil {
-		t.Fatalf("Create returned %v", err)
+	app := ws.Inspect(ref)
+	if app.Config == nil || !config.ValidUUID(app.Config.ID) || app.Config.SourceDirectory != "" || app.Config.OutputDirectory != "" {
+		t.Fatal(app)
 	}
-	want := filepath.Join("team", "tools", "example")
-	if ref.Relative != want {
-		t.Fatalf("relative path = %q, want %q", ref.Relative, want)
+	if app.Effective.SourceDirectory != "source" {
+		t.Fatal(app.Effective)
 	}
-	if _, err := os.Stat(filepath.Join(ref.Path, "app.config.json")); err != nil {
-		t.Fatalf("stat config: %v", err)
+	groups, err := ws.Groups()
+	if err != nil || len(groups) != 2 {
+		t.Fatal(groups, err)
 	}
-
-	for _, options := range []CreateOptions{
-		{Name: "bad-source", Source: "../outside"},
-		{Name: "bad-output", OutputDir: "C:\\output"},
-		{Name: "bad-group", Group: "../outside"},
-	} {
+	os.MkdirAll(filepath.Join(ref.Path, "source", "not a group"), 0755)
+	groups, _ = ws.Groups()
+	if len(groups) != 2 {
+		t.Fatal(groups)
+	}
+	if _, err := ws.Create(CreateOptions{Name: "Again", DirectoryName: "mozilla-firefox", Group: "Customer Apps/Legacy", SetupFile: "x"}); err == nil {
+		t.Fatal("overwrite")
+	}
+	for _, options := range []CreateOptions{{Name: "bad", DirectoryName: "CON", SetupFile: "x"}, {Name: "bad", Group: "../escape", SetupFile: "x"}, {Name: "bad", SourceDirectory: "../escape", SetupFile: "x"}, {Name: "bad", SetupFile: ""}} {
 		if _, err := ws.Create(options); err == nil {
-			t.Fatalf("Create(%+v) accepted unsafe path", options)
+			t.Fatal(options)
 		}
+	}
+	found, err := ws.Find("Mozilla Firefox")
+	if err != nil || found.Path != ref.Path {
+		t.Fatal(found, err)
+	}
+	_, err = ws.Create(CreateOptions{Name: "Mozilla Firefox", DirectoryName: "another", SetupFile: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.Find("Mozilla Firefox"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatal(err)
+	}
+	if Slug("Microsoft 365 Apps") != "microsoft-365-apps" || Slug("7-Zip") != "7-zip" {
+		t.Fatal("slug")
+	}
+}
+
+func TestResolverAmbiguousNamesAndMissingRegistry(t *testing.T) {
+	t.Setenv("INPAKKER_HOME", t.TempDir())
+	t.Setenv("INPAKKER_WORKSPACE", "")
+	a := makeWorkspace(t, "First")
+	b := makeWorkspace(t, "Second")
+	b.Config.Name = "first"
+	if err := config.SaveWorkspace(filepath.Join(b.Root, ConfigFile), &b.Config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve("First", t.TempDir()); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatal(err)
+	}
+	if err := os.Rename(a.Root, a.Root+" moved"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve("First", t.TempDir()); err == nil {
+		t.Fatal("missing registration silently fell through")
 	}
 }

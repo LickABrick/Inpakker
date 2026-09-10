@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LickABrick/inpakker/internal/updater"
+	"github.com/spf13/cobra"
 )
 
 func TestUpdateJSONReportsAvailableReleaseWithoutPrompting(t *testing.T) {
@@ -69,5 +71,52 @@ func TestUpdateRejectsConflictingNonInteractiveFlags(t *testing.T) {
 	command.SetArgs([]string{"--json", "--yes"})
 	if err := command.Execute(); err == nil {
 		t.Fatal("update accepted --json with --yes")
+	}
+}
+
+func TestAutomaticUpdateDoesNotWaitForNetwork(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := updater.New("0.3.0")
+	service.APIURL = server.URL
+	service.StatePath = filepath.Join(t.TempDir(), "update-state.json")
+	service.GOOS, service.GOARCH = "windows", "amd64"
+	notices := startAutomaticUpdateCheck(ctx, service)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background check did not start")
+	}
+	var output bytes.Buffer
+	command := &cobra.Command{}
+	command.SetContext(context.WithValue(ctx, updateNoticeKey{}, notices))
+	command.SetErr(&output)
+	finished := make(chan struct{})
+	go func() {
+		printAutomaticUpdateNotice(command)
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("command completion waited for network")
+	}
+	cancel()
+	select {
+	case notice := <-notices:
+		if notice != nil {
+			t.Fatal("failed automatic check produced a notice")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background check ignored cancellation")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("automatic failure produced output: %s", output.String())
 	}
 }

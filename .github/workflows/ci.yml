@@ -42,3 +42,8 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Test PowerShell installer and uninstaller
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tests/installer.ps1

@@ -6,28 +6,36 @@ import (
 	"testing"
 
 	"github.com/LickABrick/inpakker/internal/buildcache"
+	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
 
 func inspectionWorkspace(t *testing.T) (*workspace.Workspace, workspace.AppRef, string) {
 	t.Helper()
+	t.Setenv("INPAKKER_HOME", t.TempDir())
 	root := t.TempDir()
 	utility := filepath.Join(root, "IntuneWinAppUtil.exe")
 	if err := os.WriteFile(utility, []byte("utility-v1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	setup, err := workspace.Initialize(workspace.SetupOptions{Root: root, AppsDir: "apps", OutputDir: "output", IntuneWinAppUtil: utility})
+	user := config.DefaultUser()
+	user.Tools.ContentPrepTool.Path = utility
+	if err := config.SaveUser(&user); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.CreateWorkspace(workspace.CreateWorkspaceOptions{Root: root, Name: "Test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := setup.Workspace.Create(workspace.CreateOptions{Name: "browser", Source: "source", SetupFile: "setup.exe", OutputDir: "output"})
+
+	ref, err := ws.Create(workspace.CreateOptions{Name: "browser", SourceDirectory: "source", SetupFile: "setup.exe", OutputDirectory: "output"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(ref.Path, "source", "setup.exe"), []byte("installer-v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return setup.Workspace, ref, utility
+	return ws, ref, utility
 }
 
 func TestInspectBuildStateLifecycleIsReadOnly(t *testing.T) {
@@ -53,18 +61,18 @@ func TestInspectBuildStateLifecycleIsReadOnly(t *testing.T) {
 	if err := os.WriteFile(artifact, []byte("package"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := buildcache.Fingerprint(ref.Path, app.Config, output, utility)
+	fingerprint, err := buildcache.Fingerprint(ref.Path, &app.Effective.AppConfig, output, utility)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := buildcache.Load(ws.Root)
+	cache, err := buildcache.Load(cacheDirectory(t, ws))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Set(filepath.ToSlash(ref.Relative), fingerprint, ref.Path, []string{artifact}); err != nil {
+	if err := cache.Set(app.Config.ID, fingerprint, ref.Path, []string{artifact}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(ws.Root); err != nil {
+	if err := cache.Save(cacheDirectory(t, ws)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,5 +118,59 @@ func TestInspectBuildStateReportsUnavailableAndUnknown(t *testing.T) {
 	}
 	if got := (Service{}).InspectBuildState(ref); got.State != BuildStateUnknown {
 		t.Fatalf("missing workspace state = %q, want %q", got.State, BuildStateUnknown)
+	}
+}
+
+func cacheDirectory(t *testing.T, ws *workspace.Workspace) string {
+	t.Helper()
+	path, err := ws.CacheDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestEffectiveSettingsAndUUIDCacheIdentity(t *testing.T) {
+	ws, ref, utility := inspectionWorkspace(t)
+	app := ws.Inspect(ref)
+	// Convert the fixture's explicit source/output into inherited settings.
+	app.Config.SourceDirectory = ""
+	app.Config.OutputDirectory = ""
+	if err := config.SaveApp(filepath.Join(ref.Path, workspace.AppConfigFile), app.Config); err != nil {
+		t.Fatal(err)
+	}
+	app = ws.Inspect(ref)
+	output, _ := ws.OutputDir(ref, app.Config)
+	os.MkdirAll(output, 0755)
+	artifact := filepath.Join(output, "browser.intunewin")
+	os.WriteFile(artifact, []byte("package"), 0644)
+	fingerprint, err := buildcache.Fingerprint(ref.Path, &app.Effective.AppConfig, output, utility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, _ := buildcache.Load(cacheDirectory(t, ws))
+	cache.Set(app.Config.ID, fingerprint, ref.Path, []string{artifact})
+	cache.Save(cacheDirectory(t, ws))
+	moved := filepath.Join(ws.AppsDir(), "moved-browser")
+	if err := os.Rename(ref.Path, moved); err != nil {
+		t.Fatal(err)
+	}
+	movedRef := workspace.AppRef{Path: moved, Relative: ws.Relative(moved)}
+	if got := (Service{Workspace: ws}).InspectBuildState(movedRef); got.State != BuildStateCurrent {
+		t.Fatal("move lost UUID identity", got)
+	}
+	ws.Config.OutputDirectory = "packages"
+	if got := (Service{Workspace: ws}).InspectBuildState(movedRef); got.State != BuildStateNeedsBuild {
+		t.Fatal("workspace output did not affect effective fingerprint", got)
+	}
+	ws.Config.OutputDirectory = "output"
+	ws.Config.SourceDirectory = "installer"
+	os.MkdirAll(filepath.Join(moved, "installer"), 0755)
+	os.WriteFile(filepath.Join(moved, "installer", "setup.exe"), []byte("installer-v1"), 0644)
+	if got := (Service{Workspace: ws}).InspectBuildState(movedRef); got.State != BuildStateNeedsBuild {
+		t.Fatal("workspace source did not affect effective fingerprint", got)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Root, buildcache.FileName)); !os.IsNotExist(err) {
+		t.Fatal("cache leaked into workspace")
 	}
 }

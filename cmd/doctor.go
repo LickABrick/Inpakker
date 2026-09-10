@@ -15,7 +15,13 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Check workspace configuration and dependencies",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			checks := workspace.Diagnose(".")
+			ws, err := resolveWorkspace(cmd)
+			var checks []workspace.Check
+			if err != nil {
+				checks = []workspace.Check{{Name: "Workspace", Status: workspace.CheckFailure, Detail: err.Error()}}
+			} else {
+				checks = workspace.Diagnose(ws.Root)
+			}
 			if jsonOutput {
 				encoder := json.NewEncoder(cmd.OutOrStdout())
 				encoder.SetIndent("", "  ")

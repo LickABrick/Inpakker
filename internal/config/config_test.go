@@ -1,51 +1,92 @@
 package config
 
 import (
+	"github.com/LickABrick/inpakker/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/LickABrick/inpakker/types"
 )
 
-func TestValidateApp(t *testing.T) {
-	valid := &types.AppConfig{
-		Name:        "example",
-		DisplayName: "Example",
-		Source:      "source",
-		SetupFile:   "setup.exe",
-		OutputDir:   "output",
+func TestUserCreationRoundTripAndHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("INPAKKER_HOME", home)
+	cfg, err := EnsureUser()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := ValidateApp(valid); err != nil {
-		t.Fatalf("ValidateApp(valid) returned %v", err)
+	if cfg.WorkspaceDefaults.SourceDirectory != "source" {
+		t.Fatal(cfg)
 	}
-
-	invalid := &types.AppConfig{Source: "../outside", SetupFile: "/setup.exe"}
-	err := ValidateApp(invalid)
-	if err == nil {
-		t.Fatal("ValidateApp(invalid) returned nil")
+	path, _ := UserPath()
+	if path != filepath.Join(home, "config.json") {
+		t.Fatal(path)
 	}
-	for _, message := range []string{
-		"name is required",
-		"displayName is required",
-		"source must be a relative path",
-		"setupFile must be a relative path",
-	} {
-		if !strings.Contains(err.Error(), message) {
-			t.Errorf("validation error %q does not contain %q", err, message)
+	cfg.Preferences.ShowToolOutput = true
+	if err := SaveUser(cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadUser()
+	if err != nil || !loaded.Preferences.ShowToolOutput {
+		t.Fatal(loaded, err)
+	}
+	cfg.SchemaVersion = 2
+	if err := SaveUser(cfg); err == nil {
+		t.Fatal("accepted schema")
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), `"schemaVersion": 2`) {
+		t.Fatal("invalid save replaced config")
+	}
+	for _, data := range []string{`{broken`, `{"schemaVersion":2}`, `{"schemaVersion":0}`, `{"schemaVersion":1,"unknown":true}`} {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadUser(); err == nil {
+			t.Fatalf("accepted %s", data)
 		}
 	}
 }
-
-func TestValidateGlobal(t *testing.T) {
-	if err := ValidateGlobal(&types.GlobalConfig{AppsDir: "packages", DefaultOutputDir: "output"}); err != nil {
-		t.Fatalf("ValidateGlobal(valid) returned %v", err)
+func TestUUIDAndRegistrationValidation(t *testing.T) {
+	a, b := NewUUID(), NewUUID()
+	if !ValidUUID(a) || a == b {
+		t.Fatal(a, b)
 	}
-
-	err := ValidateGlobal(&types.GlobalConfig{AppsDir: "../apps", DefaultOutputDir: "/output"})
-	if err == nil {
-		t.Fatal("ValidateGlobal(invalid) returned nil")
+	for _, bad := range []string{"../escape", "", strings.ReplaceAll(a, "-", ""), strings.ToUpper(a)} {
+		if ValidUUID(bad) {
+			t.Fatalf("accepted %q", bad)
+		}
 	}
-	if !strings.Contains(err.Error(), "appsDir") || !strings.Contains(err.Error(), "defaultOutputDir") {
-		t.Fatalf("unexpected validation error: %v", err)
+	user := DefaultUser()
+	user.Workspaces = []types.WorkspaceRegistration{{ID: a, Path: t.TempDir()}}
+	user.ActiveWorkspaceID = a
+	if err := ValidateUser(&user); err != nil {
+		t.Fatal(err)
+	}
+	user.Workspaces = append(user.Workspaces, user.Workspaces[0])
+	if err := ValidateUser(&user); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+}
+func TestValidateAppAndEffectiveInheritance(t *testing.T) {
+	app := types.AppConfig{SchemaVersion: 1, ID: NewUUID(), Name: "Mozilla Firefox", SetupFile: "Firefox Setup.exe"}
+	if err := ValidateApp(&app); err != nil {
+		t.Fatal(err)
+	}
+	effective := EffectiveApp(types.WorkspaceConfig{SourceDirectory: "source", OutputDirectory: "output"}, app)
+	if !effective.SourceInherited || !effective.OutputInherited || effective.SourceDirectory != "source" {
+		t.Fatal(effective)
+	}
+	app.SourceDirectory = "installer"
+	app.OutputDirectory = "packages"
+	effective = EffectiveApp(types.WorkspaceConfig{SourceDirectory: "source", OutputDirectory: "output"}, app)
+	if effective.SourceInherited || effective.OutputInherited || effective.OutputDirectory != "packages" {
+		t.Fatal(effective)
+	}
+	for _, value := range []string{"../escape", `C:\outside`, `..\escape`, "CON", "bad:stream"} {
+		app.SourceDirectory = value
+		if err := ValidateApp(&app); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
 	}
 }

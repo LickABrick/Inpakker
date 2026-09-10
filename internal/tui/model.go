@@ -1,9 +1,16 @@
 package tui
 
 import (
+	"charm.land/bubbles/v2/filepicker"
+	"charm.land/bubbles/v2/textinput"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/LickABrick/inpakker/internal/config"
+	"github.com/LickABrick/inpakker/internal/pathopener"
+	"github.com/LickABrick/inpakker/internal/toolmanager"
+	"github.com/LickABrick/inpakker/types"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,11 +40,13 @@ const (
 	ModalMessage
 	ModalHelp
 	ModalNewApplication
-	ModalSetup
+	ModalWorkspaceForm
 	ModalBuildOptions
 	ModalPackageSelect
 	ModalUpdate
 	ModalProgress
+	ModalSetting
+	ModalTool
 )
 
 type operationKind int
@@ -61,10 +70,11 @@ type operationState struct {
 }
 
 type activityEvent struct {
-	current int
-	total   int
-	label   string
-	phase   string
+	completed int
+	current   int
+	total     int
+	label     string
+	phase     string
 }
 
 type activityMsg struct {
@@ -75,16 +85,13 @@ type activityMsg struct {
 type activityClosedMsg struct{ id int }
 
 type inventoryMsg struct {
-	apps      []ApplicationView
-	preferred string
-	err       error
-}
-
-type setupMsg struct {
-	result       workspace.SetupResult
-	apps         []ApplicationView
-	err          error
-	inventoryErr error
+	generation  int
+	workspaceID string
+	groups      []string
+	checks      []workspace.Check
+	apps        []ApplicationView
+	preferred   string
+	err         error
 }
 
 type createMsg struct {
@@ -94,7 +101,10 @@ type createMsg struct {
 	inventoryErr error
 }
 
-type updateCheckMsg struct{ result updater.Result }
+type updateCheckMsg struct {
+	result updater.Result
+	err    error
+}
 
 type validationIssue struct {
 	AppID string
@@ -149,6 +159,32 @@ type resultRow struct {
 }
 
 type Model struct {
+	user               types.UserConfig
+	accessible         bool
+	opener             pathopener.PathOpener
+	groups             []string
+	generation         int
+	refreshing         bool
+	detecting          bool
+	checkingUpdate     bool
+	updateError        error
+	registrations      []workspace.RegistrationView
+	workspaceCursor    int
+	workspaceSearch    textinput.Model
+	workspaceSearching bool
+	registryGeneration int
+	settingCursor      int
+	editKey            string
+	editValue          string
+	editScope          string
+	workspaceAction    string
+	workspaceTarget    string
+	formPath           string
+	toolStatuses       []toolmanager.Status
+	toolID             string
+	toolAction         string
+	accepted           bool
+
 	ctx       context.Context
 	root      string
 	workspace *workspace.Workspace
@@ -170,9 +206,14 @@ type Model struct {
 	modalErr        error
 	form            *huh.Form
 	create          *workspace.CreateOptions
-	setup           *workspace.SetupOptions
-	createConfirmed bool
-	setupConfirmed  bool
+	workspaceDraft  *workspace.CreateWorkspaceOptions
+	picker          filepicker.Model
+	picking         bool
+	pathInput       *huh.Input
+	directoryInput  *huh.Input
+	directoryEdited bool
+	newGroup        string
+
 	updateConfirmed bool
 	buildMode       string
 	selectedPackage string
@@ -205,13 +246,14 @@ func New(ctx context.Context, root string, ws *workspace.Workspace, runner proce
 	}
 	theme := NewTheme(true)
 	appPage := newApplicationsPage(theme)
-	if ws != nil {
-		views, err := inspectApplications(ws)
-		if err != nil {
-			return Model{}, err
-		}
-		appPage.refresh(views, "")
+	user, err := config.EnsureUser()
+	if err != nil {
+		return Model{}, err
 	}
+	if ws != nil {
+		absRoot = ws.Root
+	}
+
 	activitySpinner := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	activitySpinner.Style = theme.StatusWarning
 	bar := progress.New(progress.WithColors(theme.BrandColor, theme.AccentColor), progress.WithWidth(36))
@@ -221,19 +263,21 @@ func New(ctx context.Context, root string, ws *workspace.Workspace, runner proce
 	detailView := viewport.New(viewport.WithWidth(60), viewport.WithHeight(12))
 	helpView := viewport.New(viewport.WithWidth(54), viewport.WithHeight(12))
 	m := Model{
+		user: *user, accessible: os.Getenv("INPAKKER_ACCESSIBLE") == "1" || os.Getenv("ACCESSIBLE") == "1", opener: pathopener.Explorer{}, workspaceSearch: textinput.New(), generation: 1, refreshing: ws != nil, detecting: true, checkingUpdate: updateService != nil,
 		ctx: ctx, root: absRoot, workspace: ws, runner: runner, updater: updateService, version: version,
 		theme: theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
 		routes: []Route{{Kind: RouteApplications}}, spinner: activitySpinner, progress: bar,
 		detailViewport: detailView, helpViewport: helpView, logViewport: logView,
 	}
-	if ws == nil {
-		m.beginSetup()
-	}
+
 	return m, nil
 }
 
 func (m Model) Init() tea.Cmd {
-	commands := []tea.Cmd{tea.RequestBackgroundColor}
+	commands := []tea.Cmd{tea.RequestBackgroundColor, m.registryCmd(), m.detectToolsCmd(), m.spinner.Tick}
+	if m.workspace != nil {
+		commands = append(commands, m.inventoryCmd(""))
+	}
 	if m.form != nil {
 		commands = append(commands, m.form.Init())
 	}
@@ -253,29 +297,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case registryMsg:
+		return m.handleRegistry(msg)
+	case workspaceActionMsg:
+		return m.handleWorkspaceAction(msg)
+	case settingsMsg:
+		return m.handleSettings(msg)
+	case toolsMsg:
+		return m.handleTools(msg)
+	case folderMsg:
+		if msg.err != nil {
+			m.showError("Could not open folder", msg.err)
+		}
+		return m, nil
 	case tea.BackgroundColorMsg:
 		m.applyTheme(NewTheme(msg.IsDark()))
 		return m, nil
 	case inventoryMsg:
+		if m.workspace == nil || msg.generation != m.generation || msg.workspaceID != m.workspace.Config.ID {
+			return m, nil
+		}
+		m.refreshing = false
+		m.groups = msg.groups
+		m.diagnostics = msg.checks
 		if msg.err != nil {
 			m.showError("Refresh failed", msg.err)
 			return m, nil
 		}
 		m.apps.refresh(msg.apps, msg.preferred)
-		return m, nil
-	case setupMsg:
-		if msg.err != nil {
-			m.showError("Setup failed", msg.err)
-			return m, nil
-		}
-		m.workspace, m.root = msg.result.Workspace, msg.result.Workspace.Root
-		m.apps.refresh(msg.apps, "")
-		m.routes = []Route{{Kind: RouteApplications}}
-		if msg.inventoryErr != nil {
-			m.showError("Workspace created, but inventory refresh failed", msg.inventoryErr)
-			return m, nil
-		}
-		m.showMessage("Workspace ready", "✓ Inpakker is ready. Your Applications dashboard has been loaded.")
 		return m, nil
 	case createMsg:
 		if msg.err != nil {
@@ -291,7 +340,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showMessage("Application created", "✓ "+msg.ref.Relative+" was created successfully.")
 		return m, nil
 	case updateCheckMsg:
-		m.updateResult = msg.result
+		m.checkingUpdate = false
+		m.updateError = msg.err
+		if msg.err == nil {
+			m.updateResult = msg.result
+		}
 		return m, nil
 	case activityMsg:
 		if m.operation != nil && msg.id == m.operation.id {
@@ -311,7 +364,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleUpdateDone(msg)
 	}
 
-	if tick, ok := msg.(spinner.TickMsg); ok && m.operation != nil {
+	if tick, ok := msg.(spinner.TickMsg); ok && (m.operation != nil || m.refreshing || m.detecting || m.checkingUpdate) {
 		var command tea.Cmd
 		m.spinner, command = m.spinner.Update(tick)
 		return m, command
@@ -327,6 +380,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.modal != ModalNone {
 		return m.updateModal(msg)
+	}
+	if m.workspaceSearching && m.currentRoute().Kind == RouteWorkspaces {
+		return m.updateWorkspaceSearch(msg)
 	}
 	if m.apps.searching && m.currentRoute().Kind == RouteApplications {
 		return m.updateSearch(msg)
@@ -357,6 +413,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.updatePage(msg)
+	}
+	if m.currentRoute().Kind == RouteWorkspaces {
+		return m.updateWorkspaces(keyPress)
+	}
+	if m.currentRoute().Kind == RouteSettings {
+		return m.updateSettings(keyPress)
 	}
 	return m.updateGlobalKey(keyPress)
 }
@@ -423,8 +485,39 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(pressed, m.keys.Quit) {
 		return m, tea.Quit
 	}
-	if key.Matches(pressed, m.keys.Update) {
-		return m, m.beginUpdate()
+	if key.Matches(pressed, m.keys.Workspaces) {
+		m.pushRoute(Route{Kind: RouteWorkspaces})
+		return m, m.registryCmd()
+	}
+	if key.Matches(pressed, m.keys.Settings) {
+		m.pushRoute(Route{Kind: RouteSettings})
+		return m, nil
+	}
+	if key.Matches(pressed, m.keys.About) {
+		m.pushRoute(Route{Kind: RouteAbout})
+		return m, nil
+	}
+	if key.Matches(pressed, m.keys.Folder) {
+		return m, m.openFolderCmd()
+	}
+	if m.currentRoute().Kind == RouteAbout {
+		if pressed.Text == "c" && !m.checkingUpdate {
+			m.checkingUpdate = true
+			return m, tea.Batch(m.spinner.Tick, m.manualUpdateCmd())
+		}
+		if pressed.Text == "u" {
+			return m, m.beginUpdate()
+		}
+		return m, nil
+	}
+	if m.workspace == nil {
+		if pressed.Text == "n" {
+			return m, m.beginWorkspaceCreate()
+		}
+		if pressed.Text == "a" {
+			return m, m.beginWorkspacePath("add", "")
+		}
+		return m, nil
 	}
 
 	route := m.currentRoute()
@@ -490,15 +583,31 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.picking {
+		return m.updatePicker(msg)
+	}
+	if pressed, ok := msg.(tea.KeyPressMsg); ok && pressed.Code == tea.KeyF2 && m.pathInput != nil && m.form != nil {
+		return m, m.beginPicker()
+	}
+
 	if m.form != nil {
+		beforeName, beforeDirectory := "", ""
+		if m.create != nil && m.modal == ModalNewApplication {
+			beforeName, beforeDirectory = m.create.Name, m.create.DirectoryName
+		}
 		updated, cmd := m.form.Update(msg)
+		if m.create != nil && m.modal == ModalNewApplication {
+			if m.create.DirectoryName != beforeDirectory {
+				m.directoryEdited = true
+			}
+			if m.create.Name != beforeName && !m.directoryEdited {
+				m.create.DirectoryName = workspace.Slug(m.create.Name)
+				m.directoryInput.Value(&m.create.DirectoryName)
+			}
+		}
 		m.form = updated.(*huh.Form)
 		if m.form.State == huh.StateAborted {
-			wasSetup := m.modal == ModalSetup
 			m.closeModal()
-			if wasSetup && m.workspace == nil {
-				return m, tea.Quit
-			}
 			return m, cmd
 		}
 		if m.form.State == huh.StateCompleted {
@@ -533,37 +642,29 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	switch m.modal {
 	case ModalNewApplication:
-		if !m.createConfirmed {
-			m.closeModal()
-			return m, formCmd
+		if m.create.Group == "__new__" {
+			m.create.Group = m.form.GetString("newGroup")
 		}
+
 		m.modal, m.form = ModalProgress, nil
 		m.modalTitle, m.modalBody = "Creating application", "Preparing application workspace…"
 		return m, tea.Sequence(formCmd, m.createCmd())
-	case ModalSetup:
-		if !m.setupConfirmed {
-			m.closeModal()
-			if m.workspace == nil {
-				return m, tea.Quit
-			}
-			return m, formCmd
-		}
-		m.modal, m.form = ModalProgress, nil
-		m.modalTitle, m.modalBody = "Setting up Inpakker", "Creating workspace and example application…"
-		return m, tea.Sequence(formCmd, m.setupCmd())
+	case ModalWorkspaceForm, ModalSetting, ModalTool:
+		return m.completeManagerForm(formCmd)
+
 	case ModalBuildOptions:
-		mode := m.buildMode
+		mode := m.form.GetString("buildMode")
 		m.closeModal()
 		options := packager.BuildOptions{Force: mode == "force", NoCache: mode == "no-cache"}
 		model, cmd := m.startBuild(false, options)
 		return model, tea.Sequence(formCmd, cmd)
 	case ModalPackageSelect:
-		selected := m.selectedPackage
+		selected := m.form.GetString("package")
 		m.closeModal()
 		model, cmd := m.startUnpack(false, selected)
 		return model, tea.Sequence(formCmd, cmd)
 	case ModalUpdate:
-		if !m.updateConfirmed {
+		if !m.form.GetBool("installUpdate") {
 			m.closeModal()
 			return m, formCmd
 		}
@@ -604,6 +705,8 @@ func (m *Model) applyTheme(theme Theme) {
 }
 
 func (m *Model) closeModal() {
+	m.pathInput = nil
+	m.picking = false
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalNone, "", "", nil, nil
 }
 
@@ -640,19 +743,28 @@ func (m Model) targetApplications(all bool) ([]ApplicationView, error) {
 	return []ApplicationView{app}, nil
 }
 
-func (m *Model) openDiagnostics() {
-	m.diagnostics = workspace.Diagnose(m.root)
-	m.pushRoute(Route{Kind: RouteDiagnostics})
-}
+func (m *Model) openDiagnostics() { m.pushRoute(Route{Kind: RouteDiagnostics}) }
 
-func (m Model) refreshCmd(preferred string) tea.Cmd {
-	ws := m.workspace
+func (m *Model) refreshCmd(preferred string) tea.Cmd {
+	if m.workspace == nil || m.refreshing {
+		return nil
+	}
+	m.generation++
+	m.refreshing = true
+	return tea.Batch(m.spinner.Tick, m.inventoryCmd(preferred))
+}
+func (m Model) inventoryCmd(preferred string) tea.Cmd {
+	ws, generation := m.workspace, m.generation
 	return func() tea.Msg {
 		if ws == nil {
-			return inventoryMsg{err: errors.New("workspace is not initialized")}
+			return nil
 		}
 		apps, err := inspectApplications(ws)
-		return inventoryMsg{apps: apps, preferred: preferred, err: err}
+		groups, groupErr := ws.Groups()
+		if err == nil {
+			err = groupErr
+		}
+		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: apps, groups: groups, checks: workspace.Diagnose(ws.Root), preferred: preferred, err: err}
 	}
 }
 
@@ -663,7 +775,7 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 		defer cancel()
 		result, err := service.Check(ctx, true)
 		if err != nil {
-			return updateCheckMsg{}
+			return updateCheckMsg{err: err}
 		}
 		return updateCheckMsg{result: result}
 	}
