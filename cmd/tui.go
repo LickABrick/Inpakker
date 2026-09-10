@@ -26,15 +26,8 @@ func newTUICmd(runner process.Runner) *cobra.Command {
 func runTUI(cmd *cobra.Command, runner process.Runner) error {
 	ws, err := workspace.Open(".")
 	if errors.Is(err, os.ErrNotExist) && interactive(cmd) {
-		options := workspace.SetupOptions{Root: ".", AppsDir: "apps", OutputDir: "output", CreateExample: true}
-		if promptErr := promptSetup(cmd, &options); promptErr != nil {
-			return promptErr
-		}
-		result, setupErr := workspace.Initialize(options)
-		if setupErr != nil {
-			return setupErr
-		}
-		ws, err = result.Workspace, nil
+		// A missing workspace is handled by the staged setup flow inside the TUI.
+		ws, err = nil, nil
 	}
 	if err != nil {
 		return err
@@ -43,7 +36,7 @@ func runTUI(cmd *cobra.Command, runner process.Runner) error {
 	if !updateChecksDisabled() {
 		updateService = newUpdateService(currentVersion)
 	}
-	model, err := uiterm.New(cmd.Context(), ws, runner, updateService)
+	model, err := uiterm.New(cmd.Context(), ".", ws, runner, updateService, currentVersion)
 	if err != nil {
 		return err
 	}

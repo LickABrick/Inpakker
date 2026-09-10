@@ -35,6 +35,24 @@ type Result struct {
 	Err       error
 }
 
+type BuildState string
+
+const (
+	BuildStateCurrent     BuildState = "current"
+	BuildStateNeedsBuild  BuildState = "needs_build"
+	BuildStateNotBuilt    BuildState = "not_built"
+	BuildStateUnavailable BuildState = "unavailable"
+	BuildStateUnknown     BuildState = "unknown"
+)
+
+// BuildInspection describes the current packaging state without mutating the
+// workspace or build cache.
+type BuildInspection struct {
+	State     BuildState
+	Reason    string
+	Artifacts []string
+}
+
 type Event struct {
 	Index int
 	Total int
@@ -147,6 +165,59 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		}
 	}
 	return results, nil
+}
+
+// InspectBuildState calculates the same fingerprint and cache state used by a
+// smart build, without creating directories, invoking the packaging utility,
+// or writing the cache.
+func (s Service) InspectBuildState(ref workspace.AppRef) BuildInspection {
+	if s.Workspace == nil {
+		return BuildInspection{State: BuildStateUnknown, Reason: "workspace is unavailable"}
+	}
+	app := s.Workspace.Inspect(ref)
+	if app.Status != "valid" || app.Config == nil {
+		reason := app.Error
+		if reason == "" {
+			reason = "application configuration is invalid"
+		}
+		return BuildInspection{State: BuildStateUnavailable, Reason: reason}
+	}
+	utility := s.utilityPath()
+	if strings.TrimSpace(utility) == "" {
+		return BuildInspection{State: BuildStateUnavailable, Reason: "packaging utility is not configured"}
+	}
+	if err := workspace.EnsureFile(utility, "intunewinapputil"); err != nil {
+		return BuildInspection{State: BuildStateUnavailable, Reason: err.Error()}
+	}
+	outputPath, err := s.Workspace.OutputDir(ref, app.Config)
+	if err != nil {
+		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
+	}
+	fingerprint, err := buildcache.Fingerprint(ref.Path, app.Config, outputPath, utility)
+	if err != nil {
+		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
+	}
+	cache, err := buildcache.Load(s.Workspace.Root)
+	if err != nil {
+		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
+	}
+	key := filepath.ToSlash(ref.Relative)
+	entry, ok := cache.Get(key)
+	if !ok {
+		return BuildInspection{State: BuildStateNotBuilt, Reason: "no successful cached build"}
+	}
+	artifacts := make([]string, 0, len(entry.Artifacts))
+	for _, artifact := range entry.Artifacts {
+		artifacts = append(artifacts, filepath.Join(ref.Path, filepath.FromSlash(artifact)))
+	}
+	if cache.Current(key, fingerprint, ref.Path) {
+		return BuildInspection{State: BuildStateCurrent, Reason: "inputs and output are unchanged", Artifacts: artifacts}
+	}
+	reason := "recorded build output is missing"
+	if entry.Fingerprint != fingerprint {
+		reason = "application inputs or packaging utility changed"
+	}
+	return BuildInspection{State: BuildStateNeedsBuild, Reason: reason, Artifacts: artifacts}
 }
 
 func (s Service) utilityPath() string {
