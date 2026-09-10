@@ -30,7 +30,7 @@ type Result struct {
 
 func (s Service) Validate() error {
 	if strings.TrimSpace(s.DecoderPath) == "" {
-		return fmt.Errorf("decoderPath is not configured; obtain IntuneWinAppUtilDecoder.exe from %s", DecoderProjectURL)
+		return fmt.Errorf("Package decoder is not configured; use 'inpakker tools install decoder' or obtain it from %s", DecoderProjectURL)
 	}
 	if s.Runner == nil {
 		return errors.New("process runner is required")

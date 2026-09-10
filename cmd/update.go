@@ -66,7 +66,7 @@ func newUpdateCmd() *cobra.Command {
 			if interactive(cmd) {
 				_, err = cliui.Run(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), "Updating Inpakker", 4, func(ctx context.Context, emit func(cliui.Event)) (any, error) {
 					return nil, service.Install(ctx, result, func(event updater.Event) {
-						emit(cliui.Event{Current: event.Current, Total: event.Total, Phase: event.Phase})
+						emit(cliui.Event{Current: event.Current, Completed: event.Current, Total: event.Total, Phase: event.Phase})
 					})
 				})
 			} else {
@@ -87,38 +87,50 @@ func newUpdateCmd() *cobra.Command {
 	return command
 }
 
+type updateNoticeKey struct{}
+
 func automaticUpdateCheck(cmd *cobra.Command) {
-	pendingUpdateNotice = nil
 	if !shouldCheckForUpdates(cmd) {
 		return
 	}
-	service := newUpdateService(currentVersion)
-	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
-	defer cancel()
-	result, err := service.Check(ctx, true)
-	if err == nil && result.Available && service.CLINoticeDue() {
-		pendingUpdateNotice = &updateNotice{service: service, result: result}
-	}
+	notices := startAutomaticUpdateCheck(cmd.Context(), newUpdateService(currentVersion))
+	cmd.SetContext(context.WithValue(cmd.Context(), updateNoticeKey{}, notices))
+}
+
+func startAutomaticUpdateCheck(parent context.Context, service *updater.Service) <-chan *updateNotice {
+	notices := make(chan *updateNotice, 1)
+	go func() {
+		defer close(notices)
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+		defer cancel()
+		result, err := service.Check(ctx, true)
+		if err == nil && result.Available && service.CLINoticeDue() {
+			notices <- &updateNotice{service: service, result: result}
+		}
+	}()
+	return notices
 }
 
 func printAutomaticUpdateNotice(cmd *cobra.Command) {
-	if pendingUpdateNotice == nil {
-		return
+	notices, _ := cmd.Context().Value(updateNoticeKey{}).(<-chan *updateNotice)
+	select {
+	case notice := <-notices:
+		if notice == nil {
+			return
+		}
+		console := newConsole(cmd.ErrOrStderr(), cmd.ErrOrStderr())
+		fmt.Fprintln(cmd.ErrOrStderr())
+		console.warningDetail("Update available", "Inpakker v"+notice.result.LatestVersion+"; run 'inpakker update' to install")
+		_ = notice.service.MarkCLINotified()
+	default:
+		// A background check must never delay completion of the user's command.
 	}
-	result := pendingUpdateNotice.result
-	console := newConsole(cmd.ErrOrStderr(), cmd.ErrOrStderr())
-	fmt.Fprintln(cmd.ErrOrStderr())
-	console.warningDetail("Update available", "Inpakker v"+result.LatestVersion+"; run 'inpakker update' to install")
-	_ = pendingUpdateNotice.service.MarkCLINotified()
-	pendingUpdateNotice = nil
 }
 
 type updateNotice struct {
 	service *updater.Service
 	result  updater.Result
 }
-
-var pendingUpdateNotice *updateNotice
 
 func shouldCheckForUpdates(cmd *cobra.Command) bool {
 	if cmd.Parent() == nil || !interactive(cmd) || updateChecksDisabled() {

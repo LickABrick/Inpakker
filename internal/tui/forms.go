@@ -15,6 +15,8 @@ import (
 func (m *Model) formWithTheme(groups ...*huh.Group) *huh.Form {
 	keymap := huh.NewDefaultKeyMap()
 	keymap.Quit.SetKeys("ctrl+c", "esc")
+	keymap.Input.Prev.SetKeys("up", "shift+tab")
+	keymap.Input.Next.SetKeys("down", "tab", "enter")
 	return huh.NewForm(groups...).
 		WithKeyMap(keymap).
 		WithTheme(m.theme.HuhTheme()).
@@ -25,63 +27,27 @@ func (m *Model) formWithTheme(groups ...*huh.Group) *huh.Form {
 
 func (m *Model) beginCreate() teaCmd {
 	if m.workspace == nil {
-		m.showMessage("Workspace required", "Set up a workspace before creating an application.")
-		return nil
+		return m.beginWorkspaceCreate()
 	}
-	m.createConfirmed = false
-	m.create = &workspace.CreateOptions{Source: "source", OutputDir: m.workspace.DefaultOutputDir()}
-	m.form = m.formWithTheme(
-		huh.NewGroup(
-			huh.NewNote().Title("1 of 4 · Identity").Description("Choose the directory identifier and user-facing name."),
-			huh.NewInput().Title("Application name").Description("Used as the workspace directory and application identifier.").Value(&m.create.Name).Validate(validApplicationName),
-			huh.NewInput().Title("Display name").Value(&m.create.DisplayName),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("2 of 4 · Organization").Description("Groups are optional paths below the applications directory."),
-			huh.NewInput().Title("Group").Placeholder("Browsers").Value(&m.create.Group).Validate(validGroupName),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("3 of 4 · Package source"),
-			huh.NewInput().Title("Source directory").Value(&m.create.Source).Validate(tuiSafePath),
-			huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(requiredSafePath),
-			huh.NewInput().Title("Output directory").Value(&m.create.OutputDir).Validate(tuiSafePath),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("4 of 4 · Review").DescriptionFunc(func() string { return createReview(*m.create) }, m.create),
-			huh.NewConfirm().Title("Create application?").Affirmative("Create application").Negative("Cancel").Value(&m.createConfirmed),
-		),
-	)
-	m.modal, m.modalTitle = ModalNewApplication, "New application"
-	return m.form.Init()
-}
-
-func (m *Model) beginSetup() teaCmd {
-	m.setupConfirmed = false
-	m.setup = &workspace.SetupOptions{Root: m.root, AppsDir: "apps", OutputDir: "output", CreateExample: true}
-	m.form = m.formWithTheme(
-		huh.NewGroup(
-			huh.NewNote().Title("Welcome to Inpakker").Description("Package Win32 applications for Microsoft Intune from an organized local workspace."),
-			huh.NewNote().Title("1 of 4 · Workspace"),
-			huh.NewInput().Title("Workspace directory").Value(&m.setup.Root).Validate(huh.ValidateNotEmpty()),
-			huh.NewInput().Title("Applications directory").Value(&m.setup.AppsDir).Validate(safeWorkspacePath),
-			huh.NewInput().Title("Default output directory").Value(&m.setup.OutputDir).Validate(safeWorkspacePath),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("2 of 4 · Packaging utility"),
-			huh.NewInput().Title("IntuneWinAppUtil.exe").Description("Full path; may be left empty and configured later.").Value(&m.setup.IntuneWinAppUtil).Validate(optionalAbsolutePath),
-			huh.NewConfirm().Title("Mute packaging utility output?").Value(&m.setup.MuteUtility),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("3 of 4 · Optional decoder").Description("The decoder is only required for unpacking .intunewin files."),
-			huh.NewInput().Title("IntuneWinAppUtilDecoder.exe").Description("Optional full path.").Value(&m.setup.DecoderPath).Validate(optionalAbsolutePath),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("4 of 4 · Review").DescriptionFunc(func() string { return setupReview(*m.setup) }, m.setup),
-			huh.NewConfirm().Title("Create example application?").Affirmative("Yes").Negative("No").Value(&m.setup.CreateExample),
-			huh.NewConfirm().Title("Initialize this workspace?").Affirmative("Initialize").Negative("Cancel").Value(&m.setupConfirmed),
-		),
-	)
-	m.modal, m.modalTitle = ModalSetup, "Set up Inpakker"
+	m.create = &workspace.CreateOptions{}
+	m.directoryEdited = false
+	m.newGroup = ""
+	options := []huh.Option[string]{huh.NewOption("No group", "")}
+	for _, group := range m.groups {
+		options = append(options, huh.NewOption(group, group))
+	}
+	options = append(options, huh.NewOption("+ Create new group…", "__new__"))
+	m.directoryInput = huh.NewInput().Key("directory").Title("Directory name").Value(&m.create.DirectoryName).Validate(validApplicationName)
+	m.form = m.formWithTheme(huh.NewGroup(
+		huh.NewInput().Key("name").Title("Name").Value(&m.create.Name).Validate(huh.ValidateNotEmpty()),
+		m.directoryInput,
+		huh.NewSelect[string]().Title("Group").Options(options...).Value(&m.create.Group),
+		huh.NewInput().Key("newGroup").Title("New group (when selected)").Validate(validGroupName),
+		huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(requiredSafePath),
+		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", m.workspace.Config.SourceDirectory, m.workspace.Config.OutputDirectory)),
+		huh.NewNote().Title("Create application").Next(true).NextLabel("Create application"),
+	))
+	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	return m.form.Init()
 }
 
@@ -90,14 +56,14 @@ func (m *Model) beginBuildOptions() teaCmd {
 		m.showMessage("Build unavailable", "No application is selected.")
 		return nil
 	}
-	m.buildMode = "smart"
+	m.buildMode = "build"
 	m.form = m.formWithTheme(huh.NewGroup(
 		huh.NewNote().Description("Choose how to package the selected application."),
-		huh.NewSelect[string]().Title("Build mode").Options(
-			huh.NewOption("Smart build · Recommended", "smart"),
-			huh.NewOption("Force rebuild", "force"),
+		huh.NewSelect[string]().Key("buildMode").Title("Build mode").Options(
+			huh.NewOption("Build", "build"),
+			huh.NewOption("Rebuild", "force"),
 			huh.NewOption("Build without cache", "no-cache"),
-		).Value(&m.buildMode),
+		),
 	))
 	m.modal, m.modalTitle = ModalBuildOptions, "Build options"
 	return m.form.Init()
@@ -111,7 +77,7 @@ func (m *Model) beginPackageSelect(packages []string) teaCmd {
 	}
 	m.form = m.formWithTheme(huh.NewGroup(
 		huh.NewNote().Description("This application has multiple packages. Choose one to unpack."),
-		huh.NewSelect[string]().Title("Package").Options(options...).Value(&m.selectedPackage),
+		huh.NewSelect[string]().Key("package").Title("Package").Options(options...),
 	))
 	m.modal, m.modalTitle = ModalPackageSelect, "Select package to unpack"
 	return m.form.Init()
@@ -130,42 +96,10 @@ func (m *Model) beginUpdate() teaCmd {
 	description := fmt.Sprintf("Current       v%s\nAvailable     v%s\n\nThe release will be downloaded and its signature and checksum verified.", m.updateResult.CurrentVersion, m.updateResult.LatestVersion)
 	m.form = m.formWithTheme(huh.NewGroup(
 		huh.NewNote().Description(description),
-		huh.NewConfirm().Title("Install update?").Affirmative("Install update").Negative("Cancel").Value(&m.updateConfirmed),
+		huh.NewConfirm().Key("installUpdate").Title("Install update?").Affirmative("Install update").Negative("Cancel"),
 	))
 	m.modal, m.modalTitle = ModalUpdate, "Update Inpakker"
 	return m.form.Init()
-}
-
-func createReview(options workspace.CreateOptions) string {
-	display := options.DisplayName
-	if strings.TrimSpace(display) == "" {
-		display = options.Name
-	}
-	group := options.Group
-	if group == "" {
-		group = "—"
-	}
-	return strings.Join([]string{
-		keyValue("Name", options.Name, 14), keyValue("Display", display, 14),
-		keyValue("Group", group, 14), keyValue("Source", options.Source, 14),
-		keyValue("Setup", options.SetupFile, 14), keyValue("Output", options.OutputDir, 14),
-	}, "\n")
-}
-
-func setupReview(options workspace.SetupOptions) string {
-	utility := options.IntuneWinAppUtil
-	if utility == "" {
-		utility = "Configure later"
-	}
-	decoder := options.DecoderPath
-	if decoder == "" {
-		decoder = "Not configured"
-	}
-	return strings.Join([]string{
-		keyValue("Workspace", options.Root, 18), keyValue("Applications", options.AppsDir, 18),
-		keyValue("Output", options.OutputDir, 18), keyValue("Packaging utility", utility, 18),
-		keyValue("Decoder", decoder, 18),
-	}, "\n")
 }
 
 func validApplicationName(value string) error {

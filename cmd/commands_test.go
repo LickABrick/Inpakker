@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/LickABrick/inpakker/internal/buildcache"
+	"github.com/LickABrick/inpakker/internal/config"
 	workspace2 "github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/LickABrick/inpakker/types"
 )
@@ -95,7 +96,7 @@ func TestDiscoverAllStopsAtApplicationRoot(t *testing.T) {
 	root := t.TempDir()
 	appDir := filepath.Join(root, "apps", "group", "one")
 	writeApp(t, appDir, validApp("one"), true)
-	writeJSON(t, filepath.Join(appDir, "source", "nested", "app.config.json"), validApp("nested"))
+	writeJSON(t, filepath.Join(appDir, "source", "nested", "inpakker.app.json"), validApp("nested"))
 	ws := &workspace2.Workspace{Root: root}
 
 	selection, err := ws.Discover(nil, true)
@@ -114,11 +115,11 @@ func TestBuildSummarizesResultsAndReturnsFailure(t *testing.T) {
 	workspace := enterWorkspace(t)
 	utilPath := filepath.Join(workspace, "IntuneWinAppUtil.exe")
 	writeFile(t, utilPath, "stub")
-	writeGlobal(t, types.GlobalConfig{
-		IntuneWinAppUtil:     utilPath,
-		AppsDir:              "packages",
-		DefaultOutputDir:     "artifacts",
-		MuteIntuneWinAppUtil: true,
+	writeWorkspaceFixture(t, fixtureConfig{
+		ContentPrepTool:       utilPath,
+		ApplicationsDirectory: "packages",
+		OutputDirectory:       "artifacts",
+		ShowToolOutput:        true,
 	})
 	writeApp(t, filepath.Join(workspace, "packages", "good"), validApp("good"), true)
 	writeApp(t, filepath.Join(workspace, "packages", "bad"), validApp("bad"), false)
@@ -155,7 +156,7 @@ func TestBuildReturnsFailureWhenPackagerFails(t *testing.T) {
 	workspace := enterWorkspace(t)
 	utilPath := filepath.Join(workspace, "IntuneWinAppUtil.exe")
 	writeFile(t, utilPath, "stub")
-	writeGlobal(t, types.GlobalConfig{IntuneWinAppUtil: utilPath, MuteIntuneWinAppUtil: true})
+	writeWorkspaceFixture(t, fixtureConfig{ContentPrepTool: utilPath, ShowToolOutput: true})
 	writeApp(t, filepath.Join(workspace, "apps", "example"), validApp("example"), true)
 
 	runner := &fakeRunner{err: errors.New("packager exited with code 1")}
@@ -185,7 +186,7 @@ func TestBuildSkipsUnchangedApplicationAndForceRebuilds(t *testing.T) {
 	workspace := enterWorkspace(t)
 	utilPath := filepath.Join(workspace, "IntuneWinAppUtil.exe")
 	writeFile(t, utilPath, "stub")
-	writeGlobal(t, types.GlobalConfig{IntuneWinAppUtil: utilPath, MuteIntuneWinAppUtil: true})
+	writeWorkspaceFixture(t, fixtureConfig{ContentPrepTool: utilPath, ShowToolOutput: true})
 	writeApp(t, filepath.Join(workspace, "apps", "example"), validApp("example"), true)
 
 	runner := &fakeRunner{}
@@ -243,20 +244,20 @@ func TestBuildSkipsUnchangedApplicationAndForceRebuilds(t *testing.T) {
 
 func TestNewUsesConfiguredAppsDirAndDoesNotOverwrite(t *testing.T) {
 	workspace := enterWorkspace(t)
-	writeGlobal(t, types.GlobalConfig{AppsDir: "packages"})
+	writeWorkspaceFixture(t, fixtureConfig{ApplicationsDirectory: "packages"})
 	command := newNewCmd()
 	var stdout bytes.Buffer
 	command.SetOut(&stdout)
 
-	if err := runNew(command, workspace2.CreateOptions{Name: "example"}); err != nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "example", SetupFile: "setup.exe"}); err != nil {
 		t.Fatalf("first runNew returned %v", err)
 	}
-	configPath := filepath.Join(workspace, "packages", "example", "app.config.json")
+	configPath := filepath.Join(workspace, "packages", "example", "inpakker.app.json")
 	before, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read created config: %v", err)
 	}
-	if err := runNew(command, workspace2.CreateOptions{Name: "example"}); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "example", SetupFile: "setup.exe"}); err == nil {
 		t.Fatal("second runNew returned nil")
 	}
 	after, err := os.ReadFile(configPath)
@@ -266,20 +267,20 @@ func TestNewUsesConfiguredAppsDirAndDoesNotOverwrite(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("existing config was modified")
 	}
-	if err := runNew(command, workspace2.CreateOptions{Name: "../outside"}); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "Bad", DirectoryName: "../outside", SetupFile: "setup.exe"}); err == nil {
 		t.Fatal("runNew accepted a traversal path")
 	}
-	if err := runNew(command, workspace2.CreateOptions{Name: "CON.txt"}); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "Bad", DirectoryName: "CON.txt", SetupFile: "setup.exe"}); err == nil {
 		t.Fatal("runNew accepted a reserved Windows directory name")
 	}
-	if err := runNew(command, workspace2.CreateOptions{Name: "escaped", Source: "../outside"}); err == nil {
+	if err := runNew(command, workspace2.CreateOptions{Name: "escaped", SourceDirectory: "../outside"}); err == nil {
 		t.Fatal("runNew accepted an escaping source path")
 	}
 }
 
 func TestValidateFindsNestedAppsAndReturnsFailure(t *testing.T) {
 	workspace := enterWorkspace(t)
-	writeGlobal(t, types.GlobalConfig{AppsDir: "packages"})
+	writeWorkspaceFixture(t, fixtureConfig{ApplicationsDirectory: "packages"})
 	writeApp(t, filepath.Join(workspace, "packages", "group", "good"), validApp("good"), true)
 	writeApp(t, filepath.Join(workspace, "packages", "group", "bad"), validApp("bad"), false)
 
@@ -306,7 +307,7 @@ func TestUnpackApplicationUsesConfiguredDecoder(t *testing.T) {
 	workspace := enterWorkspace(t)
 	decoderPath := filepath.Join(workspace, "IntuneWinAppUtilDecoder.exe")
 	writeFile(t, decoderPath, "decoder")
-	writeGlobal(t, types.GlobalConfig{DecoderPath: decoderPath})
+	writeWorkspaceFixture(t, fixtureConfig{Decoder: decoderPath})
 	appDir := filepath.Join(workspace, "apps", "example")
 	writeApp(t, appDir, validApp("example"), true)
 	packagePath := filepath.Join(appDir, "output", "example.intunewin")
@@ -356,6 +357,8 @@ func TestUnpackApplicationUsesConfiguredDecoder(t *testing.T) {
 
 func enterWorkspace(t *testing.T) string {
 	t.Helper()
+	t.Setenv("INPAKKER_HOME", t.TempDir())
+	t.Setenv("INPAKKER_WORKSPACE", "")
 	dir := t.TempDir()
 	previous, err := os.Getwd()
 	if err != nil {
@@ -372,28 +375,46 @@ func enterWorkspace(t *testing.T) string {
 	return dir
 }
 
-func writeGlobal(t *testing.T, cfg types.GlobalConfig) {
+type fixtureConfig struct {
+	ContentPrepTool, Decoder, ApplicationsDirectory, OutputDirectory string
+	ShowToolOutput                                                   bool
+}
+
+func writeWorkspaceFixture(t *testing.T, cfg fixtureConfig) {
 	t.Helper()
-	writeJSON(t, "inpakker.config.json", cfg)
+	defaults := config.DefaultUser()
+	defaults.Tools.ContentPrepTool.Path = cfg.ContentPrepTool
+	defaults.Tools.Decoder.Path = cfg.Decoder
+	defaults.Preferences.ShowToolOutput = cfg.ShowToolOutput
+	if err := config.SaveUser(&defaults); err != nil {
+		t.Fatal(err)
+	}
+	apps, output := cfg.ApplicationsDirectory, cfg.OutputDirectory
+	if apps == "" {
+		apps = "apps"
+	}
+	if output == "" {
+		output = "output"
+	}
+	writeJSON(t, "inpakker.workspace.json", types.WorkspaceConfig{SchemaVersion: 1, ID: config.NewUUID(), Name: "Test workspace", ApplicationsDirectory: apps, SourceDirectory: "source", OutputDirectory: output})
 }
 
 func writeApp(t *testing.T, dir string, cfg types.AppConfig, withSetup bool) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(dir, cfg.Source), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, cfg.SourceDirectory), 0o755); err != nil {
 		t.Fatalf("create app source: %v", err)
 	}
-	writeJSON(t, filepath.Join(dir, "app.config.json"), cfg)
+	writeJSON(t, filepath.Join(dir, "inpakker.app.json"), cfg)
 	if withSetup {
-		writeFile(t, filepath.Join(dir, cfg.Source, cfg.SetupFile), "setup")
+		writeFile(t, filepath.Join(dir, cfg.SourceDirectory, cfg.SetupFile), "setup")
 	}
 }
 
 func validApp(name string) types.AppConfig {
 	return types.AppConfig{
-		Name:        name,
-		DisplayName: strings.ToUpper(name[:1]) + name[1:],
-		Source:      "source",
-		SetupFile:   "setup.exe",
+		SchemaVersion: 1, ID: config.NewUUID(), Name: name,
+		SourceDirectory: "source",
+		SetupFile:       "setup.exe",
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"github.com/LickABrick/inpakker/internal/cliui"
 	"github.com/LickABrick/inpakker/internal/packager"
 	"github.com/LickABrick/inpakker/internal/process"
-	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +29,7 @@ func newBuildCmd(runner process.Runner) *cobra.Command {
 				if !interactive(cmd) || noInput {
 					return asUsage(errors.New("provide an application or group name, or use --all"))
 				}
-				ws, err := workspace.Open(".")
+				ws, err := resolveWorkspace(cmd)
 				if err != nil {
 					return err
 				}
@@ -50,7 +49,7 @@ func newBuildCmd(runner process.Runner) *cobra.Command {
 }
 
 func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool, options packager.BuildOptions) error {
-	ws, err := workspace.Open(".")
+	ws, err := resolveWorkspace(cmd)
 	if err != nil {
 		return err
 	}
@@ -73,7 +72,7 @@ func runBuild(cmd *cobra.Command, runner process.Runner, args []string, all bool
 		var toolOutput bytes.Buffer
 		value, progressErr := cliui.Run(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), "Building applications", len(selection.Apps), func(ctx context.Context, emit func(cliui.Event)) (any, error) {
 			options.OnProgress = func(event packager.Event) {
-				emit(cliui.Event{Current: event.Index - 1, Total: event.Total, Label: event.App, Phase: event.Phase})
+				emit(cliui.Event{Current: event.Index, Completed: event.Index - 1, Total: event.Total, Label: event.App, Phase: event.Phase})
 			}
 			return service.Build(ctx, selection.Apps, options, &toolOutput, &toolOutput)
 		})

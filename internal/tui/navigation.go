@@ -10,6 +10,9 @@ const (
 	RouteBuildResults
 	RouteUnpackResults
 	RouteLogs
+	RouteWorkspaces
+	RouteSettings
+	RouteAbout
 )
 
 type Route struct {

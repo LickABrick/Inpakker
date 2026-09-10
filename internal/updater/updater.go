@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/Masterminds/semver/v3"
 	selfupdate "github.com/creativeprojects/go-selfupdate/update"
 )
@@ -417,11 +418,11 @@ func (s *Service) statePath() string {
 	if s.StatePath != "" {
 		return s.StatePath
 	}
-	root, err := os.UserCacheDir()
+	root, err := config.Home()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(root, "Inpakker", "update-state.json")
+	return filepath.Join(root, "update", "state.json")
 }
 
 func (s *Service) loadState() (state, bool) {

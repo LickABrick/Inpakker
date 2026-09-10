@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/types"
 )
 
@@ -22,6 +23,7 @@ type fingerprintHeader struct {
 	Config          types.AppConfig `json:"config"`
 	UtilityPath     string          `json:"utilityPath"`
 	UtilitySize     int64           `json:"utilitySize"`
+	UtilitySHA256   string          `json:"utilitySHA256"`
 	UtilityModified int64           `json:"utilityModified"`
 }
 
@@ -30,12 +32,26 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 	if err != nil {
 		return "", fmt.Errorf("inspect packaging utility: %w", err)
 	}
+	tool, err := os.Open(utilityPath)
+	if err != nil {
+		return "", err
+	}
+	toolHash := sha256.New()
+	_, copyErr := io.Copy(toolHash, tool)
+	closeErr := tool.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
 	header, err := json.Marshal(fingerprintHeader{
 		Schema:          currentSchema,
 		Config:          *cfg,
 		UtilityPath:     filepath.Clean(utilityPath),
 		UtilitySize:     utilityInfo.Size(),
 		UtilityModified: utilityInfo.ModTime().UnixNano(),
+		UtilitySHA256:   hex.EncodeToString(toolHash.Sum(nil)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode build inputs: %w", err)
@@ -43,7 +59,7 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 	hasher := sha256.New()
 	writeChunk(hasher, header)
 
-	sourcePath := filepath.Join(appPath, cfg.Source)
+	sourcePath := filepath.Join(appPath, pathutil.Native(cfg.SourceDirectory))
 	var paths []string
 	err = filepath.WalkDir(sourcePath, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -73,12 +89,7 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 			return "", fmt.Errorf("inspect source file %q: %w", relative, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return "", fmt.Errorf("read source symlink %q: %w", relative, err)
-			}
-			writeChunk(hasher, []byte("symlink:"+target))
-			continue
+			return "", fmt.Errorf("source entry %q is a symbolic link; use regular source files", relative)
 		}
 		if !info.Mode().IsRegular() {
 			return "", fmt.Errorf("source entry %q is not a regular file", relative)
@@ -87,6 +98,7 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 		if err != nil {
 			return "", fmt.Errorf("open source file %q: %w", relative, err)
 		}
+		_ = binary.Write(hasher, binary.LittleEndian, uint64(info.Size()))
 		_, copyErr := io.Copy(hasher, file)
 		closeErr := file.Close()
 		if copyErr != nil {

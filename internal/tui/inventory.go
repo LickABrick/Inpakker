@@ -138,7 +138,7 @@ func (p *applicationsPage) rebuildTable() {
 		rows = append(rows, p.styledApplicationRow(app))
 	}
 	p.table.SetRows(rows)
-	p.table.SetHeight(min(max(3, len(rows)+1), max(3, p.height-4)))
+	p.table.SetHeight(max(3, p.height-4))
 	if len(rows) > 0 {
 		p.table.SetCursor(max(0, cursor))
 	}
@@ -226,7 +226,7 @@ func (p applicationsPage) selected() (ApplicationView, bool) {
 func searchText(app ApplicationView) string {
 	display := ""
 	if app.App.Config != nil {
-		display = app.App.Config.DisplayName
+		display = app.App.Config.Name
 	}
 	return strings.Join([]string{app.App.Label(), display, app.Group, app.App.Ref.Relative, app.App.Status, string(app.Build.State), validationLabel(app.App), buildLabel(app.Build.State)}, " ")
 }
@@ -241,7 +241,7 @@ func validationLabel(app workspace.App) string {
 func buildLabel(state packager.BuildState) string {
 	switch state {
 	case packager.BuildStateCurrent:
-		return "✓ Current"
+		return "✓ Up to date"
 	case packager.BuildStateNeedsBuild:
 		return "• Needs build"
 	case packager.BuildStateNotBuilt:
