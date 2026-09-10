@@ -23,6 +23,15 @@ type Cache struct {
 	Apps   map[string]Entry `json:"apps"`
 }
 
+// Get returns a copy of the cached entry for an application. It is intended
+// for read-only status inspection; callers cannot mutate the cache through the
+// returned value.
+func (c *Cache) Get(key string) (Entry, bool) {
+	entry, ok := c.Apps[key]
+	entry.Artifacts = append([]string(nil), entry.Artifacts...)
+	return entry, ok
+}
+
 func Load(workspaceRoot string) (*Cache, error) {
 	path := filepath.Join(workspaceRoot, FileName)
 	data, err := os.ReadFile(path)

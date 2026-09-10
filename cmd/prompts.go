@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -24,29 +25,51 @@ func runForm(cmd *cobra.Command, form *huh.Form) error {
 }
 
 func promptNew(cmd *cobra.Command, options *workspace.CreateOptions) error {
-	return runForm(cmd, huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("Application name").Value(&options.Name).Validate(func(value string) error {
-			if !workspace.ValidAppName(value) {
-				return errors.New("use a valid Windows directory name")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("Group").Description("Optional path below the applications directory").Value(&options.Group).Validate(func(value string) error {
-			if !workspace.ValidGroupName(value) {
-				return errors.New("use a relative path of valid Windows directory names")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("Display name").Value(&options.DisplayName),
-		huh.NewInput().Title("Source directory").Value(&options.Source).Validate(safeOptionalPath),
-		huh.NewInput().Title("Setup file").Value(&options.SetupFile).Validate(func(value string) error {
-			if strings.TrimSpace(value) == "" {
-				return errors.New("setup file is required")
-			}
-			return safeOptionalPath(value)
-		}),
-		huh.NewInput().Title("Output directory").Value(&options.OutputDir).Validate(safeOptionalPath),
-	)))
+	return runForm(cmd, huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().Title("1 of 4 · Identity").Description("Choose the directory identifier and user-facing name."),
+			huh.NewInput().Title("Application name").Value(&options.Name).Validate(func(value string) error {
+				if !workspace.ValidAppName(value) {
+					return errors.New("use a valid Windows directory name")
+				}
+				return nil
+			}),
+			huh.NewInput().Title("Display name").Value(&options.DisplayName),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("2 of 4 · Organization"),
+			huh.NewInput().Title("Group").Description("Optional path below the applications directory").Value(&options.Group).Validate(func(value string) error {
+				if !workspace.ValidGroupName(value) {
+					return errors.New("use a relative path of valid Windows directory names")
+				}
+				return nil
+			}),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("3 of 4 · Package source"),
+			huh.NewInput().Title("Source directory").Value(&options.Source).Validate(safeOptionalPath),
+			huh.NewInput().Title("Setup file").Value(&options.SetupFile).Validate(func(value string) error {
+				if strings.TrimSpace(value) == "" {
+					return errors.New("setup file is required")
+				}
+				return safeOptionalPath(value)
+			}),
+			huh.NewInput().Title("Output directory").Value(&options.OutputDir).Validate(safeOptionalPath),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("4 of 4 · Review").DescriptionFunc(func() string {
+				display := options.DisplayName
+				if display == "" {
+					display = options.Name
+				}
+				group := options.Group
+				if group == "" {
+					group = "—"
+				}
+				return fmt.Sprintf("Name          %s\nDisplay       %s\nGroup         %s\nSource        %s\nSetup         %s\nOutput        %s", options.Name, display, group, options.Source, options.SetupFile, options.OutputDir)
+			}, options),
+		),
+	))
 }
 
 func promptApplications(cmd *cobra.Command, ws *workspace.Workspace, title string, multiple bool, requirePackage bool) ([]string, error) {

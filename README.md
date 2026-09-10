@@ -16,7 +16,9 @@ available as a scriptable command.
 ## Features
 
 - Guided workspace setup and application creation.
-- Interactive terminal UI with search, details, and common actions.
+- Polished terminal dashboard with separate validation, build, and package state.
+- Inline fuzzy search, structured details, diagnostics, and contextual help.
+- Staged setup and application-creation wizards.
 - CLI commands suitable for PowerShell scripts and automation.
 - Application groups for organizing larger packaging collections.
 - Validation before packaging, with actionable error messages.
@@ -44,7 +46,7 @@ not reimplement or redistribute Microsoft's packaging tool.
 2. Verify the downloaded ZIP against the SHA-256 checksum manifest:
 
    ```powershell
-   Get-FileHash .\inpakker_v0.2.0_windows_amd64.zip -Algorithm SHA256
+   Get-FileHash .\inpakker_*_windows_amd64.zip -Algorithm SHA256
    ```
 
 3. Extract `inpakker.exe` to a directory of your choice.
@@ -60,12 +62,12 @@ Open Windows Terminal in the directory where you want to keep your application
 workspace and run:
 
 ```powershell
-inpakker setup
+inpakker
 ```
 
-The guided setup asks where `IntuneWinAppUtil.exe` is installed, creates the
-workspace structure, and adds a harmless PowerShell example package. Check the
-result and build the example:
+The staged setup wizard asks where `IntuneWinAppUtil.exe` is installed, creates
+the workspace structure, and can add a harmless PowerShell example package.
+Check the result and build the example:
 
 ```powershell
 inpakker doctor
@@ -97,17 +99,25 @@ Run `inpakker <command> --help` for all options.
 
 ## Terminal interface
 
-The TUI provides fuzzy search, application status and details, guided app
-creation, workspace diagnostics, refresh, validation, building, unpacking, and
-application updates. The footer always shows the available keyboard shortcuts.
+The TUI opens to an Applications dashboard. Its responsive table shows
+validation, cached build state, and package count separately. Press `/` to
+search, `Enter` for structured application details, `n` to create an app, or
+`d` for workspace diagnostics. Build, validation, unpack, and secure update
+workflows use consistent progress and result views.
+
+The footer shows the most useful actions for the current page; press `?` for
+the complete shortcut guide. `Backspace` returns to the previous page, while
+`Esc` cancels a form, closes a dialog, or exits search. During an operation,
+`Ctrl+C` cancels that work without quitting Inpakker.
 
 Every TUI operation has a CLI equivalent. Raw configuration editing and
 destructive workspace operations are intentionally left to your editor and
 version-control workflow.
 
-For screen-reader-friendly forms, set either `INPAKKER_ACCESSIBLE=1` or
-`ACCESSIBLE=1` before starting Inpakker. Colors automatically adapt to terminal
-support and are omitted from redirected output.
+See the [TUI guide](docs/tui.md) for the full key map and workflow details.
+For screen-reader-friendly Huh forms, set either `INPAKKER_ACCESSIBLE=1` or
+`ACCESSIBLE=1` when using the interactive `setup` and `new` commands. Critical
+state never depends on color alone.
 
 ## Workspace
 

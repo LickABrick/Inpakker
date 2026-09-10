@@ -32,16 +32,20 @@ terminal-aware presentation.
   executable replacement.
 - `internal/process/`: injectable external-process runner.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
-- `internal/tui/`: Bubble Tea workspace interface; it composes the same services
-  used by CLI commands.
+- `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
+  application, `navigation.go` and `keymap.go` define routes/input precedence,
+  `inventory.go` owns table/search state, `forms.go` defines staged Huh dialogs,
+  `operations.go` runs cancellable services, and `render.go` composes the shell
+  and pages using the centralized styles in `theme.go`.
 - `types/types.go`: JSON-backed global and application configuration types.
 - `README.md`: concise end-user installation, features, and common workflows.
-- `docs/`: detailed end-user configuration and troubleshooting references.
+- `docs/`: detailed end-user configuration, TUI, and troubleshooting references.
 - `CONTRIBUTING.md` and `SECURITY.md`: public contribution and vulnerability
   reporting guidance.
 
 Tests cover configuration validation, target discovery, command summaries,
-incremental builds, usage errors, onboarding, packaging failures, scaffold
+incremental builds and read-only build-state inspection, usage errors,
+onboarding, TUI routing/input/responsive states, packaging failures, scaffold
 safety, decoder isolation, ZIP extraction safety, update caching, release
 discovery, and signed update verification. There is no checked-in example
 workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
@@ -204,6 +208,12 @@ them:
   invocation prints help. `tui` opens it explicitly. Every TUI action must have
   a non-interactive CLI command/flag equivalent. The TUI intentionally excludes
   delete, rename, and raw config editing.
+- TUI rendering operates only on inspected in-memory inventory. Refresh it on
+  initial load, explicit refresh, and after create/build/validate/unpack; never
+  perform filesystem or network work from `View()`.
+- TUI input priority is window events, active operation, modal/form/input, page,
+  then global actions. Backspace belongs to focused inputs before route
+  navigation, and Ctrl+C cancels an active operation without quitting the TUI.
 - `setup` initializes the config and directories and creates a valid PowerShell
   example unless `--no-example` is used. `doctor` performs read-only workspace
   checks. A missing config encountered during interactive TUI startup launches

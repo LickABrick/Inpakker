@@ -1,64 +1,63 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/LickABrick/inpakker/internal/packager"
-	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/internal/process"
-	"github.com/LickABrick/inpakker/internal/unpacker"
 	"github.com/LickABrick/inpakker/internal/updater"
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
 
-type screen int
-
 const (
-	listScreen screen = iota
-	detailScreen
-	createScreen
-	updateScreen
-	resultScreen
+	minimumWidth  = 60
+	minimumHeight = 18
 )
 
-type appItem struct{ app workspace.App }
+type ModalKind int
 
-func (i appItem) Title() string { return i.app.Label() }
-func (i appItem) Description() string {
-	group := filepath.Dir(i.app.Ref.Relative)
-	if group == "." {
-		group = "ungrouped"
-	}
-	return fmt.Sprintf("%s  |  %s  |  %d package(s)", group, i.app.Status, len(i.app.Packages))
-}
-func (i appItem) FilterValue() string {
-	return strings.Join([]string{i.app.Label(), i.app.Ref.Relative, i.app.Status}, " ")
-}
+const (
+	ModalNone ModalKind = iota
+	ModalMessage
+	ModalHelp
+	ModalNewApplication
+	ModalSetup
+	ModalBuildOptions
+	ModalPackageSelect
+	ModalUpdate
+	ModalProgress
+)
 
-type operationMsg struct {
-	title          string
-	body           string
-	err            error
-	updatedVersion string
-	clearUpdate    bool
-}
+type operationKind int
 
-type refreshMsg struct {
-	apps []workspace.App
-	err  error
+const (
+	operationBuild operationKind = iota
+	operationValidate
+	operationUnpack
+	operationUpdate
+)
+
+type operationState struct {
+	id      int
+	kind    operationKind
+	title   string
+	context context.Context
+	cancel  context.CancelFunc
+	events  chan activityEvent
+	current activityEvent
+	started time.Time
 }
 
 type activityEvent struct {
@@ -68,506 +67,592 @@ type activityEvent struct {
 	phase   string
 }
 
-type activityMsg activityEvent
-type activityClosedMsg struct{}
+type activityMsg struct {
+	id int
+	activityEvent
+}
 
-type updateCheckMsg struct {
-	result updater.Result
+type activityClosedMsg struct{ id int }
+
+type inventoryMsg struct {
+	apps      []ApplicationView
+	preferred string
+	err       error
+}
+
+type setupMsg struct {
+	result       workspace.SetupResult
+	apps         []ApplicationView
+	err          error
+	inventoryErr error
+}
+
+type createMsg struct {
+	ref          workspace.AppRef
+	apps         []ApplicationView
+	err          error
+	inventoryErr error
+}
+
+type updateCheckMsg struct{ result updater.Result }
+
+type validationIssue struct {
+	AppID string
+	Name  string
+	Issue string
+}
+
+type validationDoneMsg struct {
+	id     int
+	valid  int
+	issues []validationIssue
+	apps   []ApplicationView
+	all    bool
+	err    error
+}
+
+type buildDoneMsg struct {
+	id      int
+	results []packager.Result
+	apps    []ApplicationView
+	all     bool
+	log     string
+	err     error
+}
+
+type unpackFailure struct {
+	Name  string
+	Issue string
+}
+
+type unpackDoneMsg struct {
+	id        int
+	succeeded int
+	outputs   []string
+	failures  []unpackFailure
+	apps      []ApplicationView
+	all       bool
+	err       error
+}
+
+type updateDoneMsg struct {
+	id      int
+	version string
+	err     error
+}
+
+type resultRow struct {
+	Name   string
+	Status string
+	Detail string
+	AppID  string
 }
 
 type Model struct {
-	ctx             context.Context
-	workspace       *workspace.Workspace
-	runner          process.Runner
-	updater         *updater.Service
-	updateResult    updater.Result
-	list            list.Model
-	apps            []workspace.App
-	screen          screen
-	busy            bool
-	width           int
-	height          int
-	title           string
-	body            string
-	err             error
+	ctx       context.Context
+	root      string
+	workspace *workspace.Workspace
+	runner    process.Runner
+	updater   *updater.Service
+	version   string
+
+	width, height int
+	theme         Theme
+	keys          KeyMap
+	help          help.Model
+	apps          applicationsPage
+	routes        []Route
+	updateResult  updater.Result
+
+	modal           ModalKind
+	modalTitle      string
+	modalBody       string
+	modalErr        error
 	form            *huh.Form
 	create          *workspace.CreateOptions
+	setup           *workspace.SetupOptions
+	createConfirmed bool
+	setupConfirmed  bool
 	updateConfirmed bool
+	buildMode       string
+	selectedPackage string
+
+	operation       *operationState
+	nextOperationID int
 	spinner         spinner.Model
 	progress        progress.Model
-	activity        chan activityEvent
-	current         activityEvent
-	activityContext context.Context
-	cancelActivity  context.CancelFunc
+
+	diagnostics      []workspace.Check
+	validationValid  int
+	validationIssues []validationIssue
+	resultTitle      string
+	resultRows       []resultRow
+	resultCursor     int
+	logTitle         string
+	logText          string
+	detailViewport   viewport.Model
+	helpViewport     viewport.Model
+	logViewport      viewport.Model
 }
 
-var (
-	headingStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	errorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	helpStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-)
-
-func New(ctx context.Context, ws *workspace.Workspace, runner process.Runner, updateService *updater.Service) (Model, error) {
-	apps, err := ws.List()
-	if err != nil {
-		return Model{}, err
+func New(ctx context.Context, root string, ws *workspace.Workspace, runner process.Runner, updateService *updater.Service, version string) (Model, error) {
+	if strings.TrimSpace(root) == "" {
+		root = "."
 	}
-	items := toItems(apps)
-	applicationList := list.New(items, list.NewDefaultDelegate(), 80, 24)
-	applicationList.Title = "Inpakker workspace"
-	applicationList.SetStatusBarItemName("application", "applications")
-	applicationList.SetShowHelp(false)
-	activity := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	activity.Style = headingStyle
-	bar := progress.New(progress.WithColors(lipgloss.Color("6")), progress.WithWidth(36))
-	return Model{ctx: ctx, workspace: ws, runner: runner, updater: updateService, list: applicationList, apps: apps, spinner: activity, progress: bar}, nil
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Model{}, fmt.Errorf("resolve TUI workspace root: %w", err)
+	}
+	theme := NewTheme(true)
+	appPage := newApplicationsPage(theme)
+	if ws != nil {
+		views, err := inspectApplications(ws)
+		if err != nil {
+			return Model{}, err
+		}
+		appPage.refresh(views, "")
+	}
+	activitySpinner := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	activitySpinner.Style = theme.StatusWarning
+	bar := progress.New(progress.WithColors(theme.BrandColor, theme.AccentColor), progress.WithWidth(36))
+	helpModel := help.New()
+	helpModel.Styles = theme.HelpStyles()
+	logView := viewport.New(viewport.WithWidth(60), viewport.WithHeight(12))
+	detailView := viewport.New(viewport.WithWidth(60), viewport.WithHeight(12))
+	helpView := viewport.New(viewport.WithWidth(54), viewport.WithHeight(12))
+	m := Model{
+		ctx: ctx, root: absRoot, workspace: ws, runner: runner, updater: updateService, version: version,
+		theme: theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
+		routes: []Route{{Kind: RouteApplications}}, spinner: activitySpinner, progress: bar,
+		detailViewport: detailView, helpViewport: helpView, logViewport: logView,
+	}
+	if ws == nil {
+		m.beginSetup()
+	}
+	return m, nil
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.updater == nil {
-		return nil
+	commands := []tea.Cmd{tea.RequestBackgroundColor}
+	if m.form != nil {
+		commands = append(commands, m.form.Init())
 	}
-	return m.checkUpdateCmd()
+	if m.updater != nil {
+		commands = append(commands, m.checkUpdateCmd())
+	}
+	return tea.Batch(commands...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.list.SetSize(msg.Width, max(8, msg.Height-2))
-	case refreshMsg:
-		m.busy = false
+		m.resize(msg.Width, msg.Height)
+		if m.form != nil {
+			updated, cmd := m.form.Update(msg)
+			m.form = updated.(*huh.Form)
+			return m, cmd
+		}
+		return m, nil
+	case tea.BackgroundColorMsg:
+		m.applyTheme(NewTheme(msg.IsDark()))
+		return m, nil
+	case inventoryMsg:
 		if msg.err != nil {
-			m.title, m.body, m.err, m.screen = "Refresh failed", "", msg.err, resultScreen
+			m.showError("Refresh failed", msg.err)
 			return m, nil
 		}
-		m.apps = msg.apps
-		return m, m.list.SetItems(toItems(msg.apps))
-	case operationMsg:
-		m.busy = false
-		if m.cancelActivity != nil {
-			m.cancelActivity()
+		m.apps.refresh(msg.apps, msg.preferred)
+		return m, nil
+	case setupMsg:
+		if msg.err != nil {
+			m.showError("Setup failed", msg.err)
+			return m, nil
 		}
-		m.activity = nil
-		if msg.clearUpdate {
-			m.updateResult.Available = false
-			m.list.Title = "Inpakker workspace"
+		m.workspace, m.root = msg.result.Workspace, msg.result.Workspace.Root
+		m.apps.refresh(msg.apps, "")
+		m.routes = []Route{{Kind: RouteApplications}}
+		if msg.inventoryErr != nil {
+			m.showError("Workspace created, but inventory refresh failed", msg.inventoryErr)
+			return m, nil
 		}
-		if msg.updatedVersion != "" {
-			m.updateResult.LatestVersion = msg.updatedVersion
+		m.showMessage("Workspace ready", "✓ Inpakker is ready. Your Applications dashboard has been loaded.")
+		return m, nil
+	case createMsg:
+		if msg.err != nil {
+			m.showError("Could not create application", msg.err)
+			return m, nil
 		}
-		m.title, m.body, m.err, m.screen = msg.title, msg.body, msg.err, resultScreen
+		m.routes = []Route{{Kind: RouteApplications}}
+		if msg.inventoryErr != nil {
+			m.showError("Application created, but inventory refresh failed", msg.inventoryErr)
+			return m, nil
+		}
+		m.apps.refresh(msg.apps, msg.ref.Relative)
+		m.showMessage("Application created", "✓ "+msg.ref.Relative+" was created successfully.")
 		return m, nil
 	case updateCheckMsg:
 		m.updateResult = msg.result
-		if msg.result.Available {
-			m.list.Title = "Inpakker workspace  •  Update v" + msg.result.LatestVersion + " available"
-		}
 		return m, nil
 	case activityMsg:
-		m.current = activityEvent(msg)
-		return m, m.waitForActivity()
+		if m.operation != nil && msg.id == m.operation.id {
+			m.operation.current = msg.activityEvent
+			return m, m.waitForActivity(msg.id)
+		}
+		return m, nil
 	case activityClosedMsg:
 		return m, nil
-	}
-	if tick, ok := msg.(spinner.TickMsg); ok && m.busy {
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(tick)
-		return m, cmd
+	case validationDoneMsg:
+		return m.handleValidationDone(msg)
+	case buildDoneMsg:
+		return m.handleBuildDone(msg)
+	case unpackDoneMsg:
+		return m.handleUnpackDone(msg)
+	case updateDoneMsg:
+		return m.handleUpdateDone(msg)
 	}
 
-	key, isKey := msg.(tea.KeyPressMsg)
-	if !isKey {
-		return m.updateComponent(msg)
+	if tick, ok := msg.(spinner.TickMsg); ok && m.operation != nil {
+		var command tea.Cmd
+		m.spinner, command = m.spinner.Update(tick)
+		return m, command
 	}
-	if m.busy {
-		if key.String() == "ctrl+c" || key.String() == "q" {
-			if m.cancelActivity != nil {
-				m.cancelActivity()
-			}
-			return m, tea.Quit
+
+	keyPress, isKey := msg.(tea.KeyPressMsg)
+	if m.operation != nil {
+		if isKey && key.Matches(keyPress, m.keys.Cancel) {
+			m.cancelOperation()
+			m.showMessage("Cancelled", "The operation was cancelled. No other Inpakker actions were closed.")
 		}
 		return m, nil
 	}
-
-	switch m.screen {
-	case listScreen:
-		if m.list.SettingFilter() {
-			return m.updateComponent(msg)
-		}
-		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "enter":
-			if app, ok := m.selected(); ok {
-				m.title, m.body, m.err, m.screen = app.Label(), detailBody(app), nil, detailScreen
-			}
-			return m, nil
-		case "n":
-			return m, m.beginCreate()
-		case "r":
-			m.busy = true
-			return m, m.refreshCmd()
-		case "d":
-			return m.startDoctor()
-		case "v":
-			return m.startValidate(false)
-		case "ctrl+v":
-			return m.startValidate(true)
-		case "b":
-			return m.startBuild(false)
-		case "ctrl+b":
-			return m.startBuild(true)
-		case "u":
-			return m.startUnpack(false)
-		case "U":
-			if m.updateResult.Available {
-				return m, m.beginUpdate()
-			}
-			return m, nil
-		case "ctrl+u":
-			return m.startUnpack(true)
-		}
-	case detailScreen, resultScreen:
-		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "esc", "enter":
-			m.screen, m.err = listScreen, nil
-			return m, m.refreshCmd()
-		}
-	case createScreen, updateScreen:
-		return m.updateComponent(msg)
+	if m.modal != ModalNone {
+		return m.updateModal(msg)
 	}
-	return m.updateComponent(msg)
+	if m.apps.searching && m.currentRoute().Kind == RouteApplications {
+		return m.updateSearch(msg)
+	}
+	if !isKey {
+		return m.updatePage(msg)
+	}
+
+	if m.currentRoute().Kind == RouteApplications && (key.Matches(keyPress, m.keys.Up) || key.Matches(keyPress, m.keys.Down)) {
+		return m.updatePage(msg)
+	}
+	if m.currentRoute().Kind == RouteApplication && key.Matches(keyPress, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
+		return m.updatePage(msg)
+	}
+	if (m.currentRoute().Kind == RouteValidationResults || m.currentRoute().Kind == RouteBuildResults || m.currentRoute().Kind == RouteUnpackResults) &&
+		(key.Matches(keyPress, m.keys.Up) || key.Matches(keyPress, m.keys.Down)) {
+		if key.Matches(keyPress, m.keys.Up) && m.resultCursor > 0 {
+			m.resultCursor--
+		}
+		if key.Matches(keyPress, m.keys.Down) && m.resultCursor < len(m.resultRows)-1 {
+			m.resultCursor++
+		}
+		return m, nil
+	}
+	if m.currentRoute().Kind == RouteLogs {
+		if key.Matches(keyPress, m.keys.Back, m.keys.Escape) {
+			m.popRoute()
+			return m, nil
+		}
+		return m.updatePage(msg)
+	}
+	return m.updateGlobalKey(keyPress)
 }
 
-func (m Model) updateComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.screen == createScreen || m.screen == updateScreen {
+func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m.currentRoute().Kind {
+	case RouteApplications:
+		var cmd tea.Cmd
+		m.apps.table, cmd = m.apps.table.Update(msg)
+		return m, cmd
+	case RouteApplication:
+		m.detailViewport.SetContent(m.applicationView(max(20, m.width-8)))
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
+	case RouteLogs:
+		var cmd tea.Cmd
+		m.logViewport, cmd = m.logViewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyPress, ok := msg.(tea.KeyPressMsg); ok {
+		switch {
+		case key.Matches(keyPress, m.keys.Escape):
+			m.apps.searching = false
+			m.apps.search.Blur()
+			m.apps.search.SetValue("")
+			m.apps.applyFilter("")
+			return m, nil
+		case key.Matches(keyPress, m.keys.Open):
+			if app, ok := m.apps.selected(); ok {
+				m.apps.searching = false
+				m.apps.search.Blur()
+				m.pushRoute(Route{Kind: RouteApplication, AppID: app.App.Ref.Relative})
+			}
+			return m, nil
+		case key.Matches(keyPress, m.keys.Up, m.keys.Down):
+			var cmd tea.Cmd
+			m.apps.table, cmd = m.apps.table.Update(msg)
+			return m, cmd
+		}
+	}
+	before := m.apps.search.Value()
+	updated, cmd := m.apps.search.Update(msg)
+	m.apps.search = updated
+	if before != m.apps.search.Value() {
+		m.apps.applyFilter("")
+	}
+	return m, cmd
+}
+
+func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(pressed, m.keys.Help) {
+		m.modal, m.modalTitle = ModalHelp, "Keyboard shortcuts"
+		m.helpViewport.GotoTop()
+		return m, nil
+	}
+	if key.Matches(pressed, m.keys.Back, m.keys.Escape) && m.popRoute() {
+		return m, nil
+	}
+	if key.Matches(pressed, m.keys.Quit) {
+		return m, tea.Quit
+	}
+	if key.Matches(pressed, m.keys.Update) {
+		return m, m.beginUpdate()
+	}
+
+	route := m.currentRoute()
+	switch route.Kind {
+	case RouteApplications:
+		switch {
+		case key.Matches(pressed, m.keys.Open):
+			if app, ok := m.apps.selected(); ok {
+				m.pushRoute(Route{Kind: RouteApplication, AppID: app.App.Ref.Relative})
+			}
+		case key.Matches(pressed, m.keys.Search):
+			m.apps.searching = true
+			return m, m.apps.search.Focus()
+		case key.Matches(pressed, m.keys.NewApp):
+			return m, m.beginCreate()
+		case key.Matches(pressed, m.keys.Refresh):
+			return m, m.refreshCmd("")
+		case key.Matches(pressed, m.keys.Diagnostics):
+			m.openDiagnostics()
+		case key.Matches(pressed, m.keys.Build):
+			return m.startBuild(false, packager.BuildOptions{})
+		case key.Matches(pressed, m.keys.BuildAll):
+			return m.startBuild(true, packager.BuildOptions{})
+		case key.Matches(pressed, m.keys.BuildOptions):
+			return m, m.beginBuildOptions()
+		case key.Matches(pressed, m.keys.Validate):
+			return m.startValidate(false)
+		case key.Matches(pressed, m.keys.ValidateAll):
+			return m.startValidate(true)
+		case key.Matches(pressed, m.keys.Unpack):
+			return m.startUnpack(false, "")
+		case key.Matches(pressed, m.keys.UnpackAll):
+			return m.startUnpack(true, "")
+		}
+	case RouteApplication:
+		switch {
+		case key.Matches(pressed, m.keys.Build):
+			return m.startBuild(false, packager.BuildOptions{})
+		case key.Matches(pressed, m.keys.BuildOptions):
+			return m, m.beginBuildOptions()
+		case key.Matches(pressed, m.keys.Validate):
+			return m.startValidate(false)
+		case key.Matches(pressed, m.keys.Unpack):
+			return m.startUnpack(false, "")
+		case key.Matches(pressed, m.keys.Diagnostics):
+			m.openDiagnostics()
+		case key.Matches(pressed, m.keys.Refresh):
+			return m, m.refreshCmd(route.AppID)
+		}
+	case RouteDiagnostics:
+		if key.Matches(pressed, m.keys.Refresh) {
+			m.openDiagnostics()
+		}
+	case RouteValidationResults, RouteBuildResults, RouteUnpackResults:
+		if key.Matches(pressed, m.keys.Open) && m.resultCursor >= 0 && m.resultCursor < len(m.resultRows) && m.resultRows[m.resultCursor].AppID != "" {
+			m.pushRoute(Route{Kind: RouteApplication, AppID: m.resultRows[m.resultCursor].AppID})
+		}
+		if key.Matches(pressed, m.keys.Logs) && strings.TrimSpace(m.logText) != "" {
+			m.pushRoute(Route{Kind: RouteLogs})
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.form != nil {
 		updated, cmd := m.form.Update(msg)
 		m.form = updated.(*huh.Form)
-		if m.form.State == huh.StateCompleted {
-			if m.screen == updateScreen {
-				if !m.updateConfirmed {
-					m.screen = listScreen
-					return m, cmd
-				}
-				m.busy = true
-				operationContext := m.startActivity(4)
-				return m, tea.Sequence(cmd, tea.Batch(m.spinner.Tick, m.waitForActivity(), m.updateCmd(operationContext)))
-			}
-			m.busy = true
-			return m, tea.Sequence(cmd, m.createCmd())
-		}
 		if m.form.State == huh.StateAborted {
-			m.screen = listScreen
+			wasSetup := m.modal == ModalSetup
+			m.closeModal()
+			if wasSetup && m.workspace == nil {
+				return m, tea.Quit
+			}
+			return m, cmd
+		}
+		if m.form.State == huh.StateCompleted {
+			return m.completeForm(cmd)
 		}
 		return m, cmd
 	}
-	if m.screen == listScreen {
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+	if pressed, ok := msg.(tea.KeyPressMsg); ok {
+		if m.modal == ModalHelp && key.Matches(pressed, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
+			m.helpViewport.SetContent(m.helpContent())
+			var cmd tea.Cmd
+			m.helpViewport, cmd = m.helpViewport.Update(msg)
+			return m, cmd
+		}
+		if m.modal == ModalMessage && key.Matches(pressed, m.keys.Diagnostics) {
+			m.closeModal()
+			m.openDiagnostics()
+			return m, nil
+		}
+		if m.modal == ModalMessage && key.Matches(pressed, m.keys.Logs) && strings.TrimSpace(m.logText) != "" {
+			m.closeModal()
+			m.pushRoute(Route{Kind: RouteLogs})
+			return m, nil
+		}
+		if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open, m.keys.Help) {
+			m.closeModal()
+		}
 	}
 	return m, nil
 }
 
-func (m Model) View() tea.View {
-	var content string
-	switch m.screen {
-	case detailScreen, resultScreen:
-		content = headingStyle.Render(m.title) + "\n\n"
-		if m.err != nil {
-			content += errorStyle.Render("Error: "+m.err.Error()) + "\n"
+func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	switch m.modal {
+	case ModalNewApplication:
+		if !m.createConfirmed {
+			m.closeModal()
+			return m, formCmd
 		}
-		if m.body != "" {
-			content += m.body + "\n"
+		m.modal, m.form = ModalProgress, nil
+		m.modalTitle, m.modalBody = "Creating application", "Preparing application workspace…"
+		return m, tea.Sequence(formCmd, m.createCmd())
+	case ModalSetup:
+		if !m.setupConfirmed {
+			m.closeModal()
+			if m.workspace == nil {
+				return m, tea.Quit
+			}
+			return m, formCmd
 		}
-		content += "\n" + helpStyle.Render("enter/esc back  •  q quit")
-	case createScreen, updateScreen:
-		content = m.form.View()
-	default:
-		help := "enter details  •  / search  •  n create  •  d doctor  •  v/b/u selected  •  ctrl+v/b/u all"
-		if m.updateResult.Available {
-			help += "  •  U update"
+		m.modal, m.form = ModalProgress, nil
+		m.modalTitle, m.modalBody = "Setting up Inpakker", "Creating workspace and example application…"
+		return m, tea.Sequence(formCmd, m.setupCmd())
+	case ModalBuildOptions:
+		mode := m.buildMode
+		m.closeModal()
+		options := packager.BuildOptions{Force: mode == "force", NoCache: mode == "no-cache"}
+		model, cmd := m.startBuild(false, options)
+		return model, tea.Sequence(formCmd, cmd)
+	case ModalPackageSelect:
+		selected := m.selectedPackage
+		m.closeModal()
+		model, cmd := m.startUnpack(false, selected)
+		return model, tea.Sequence(formCmd, cmd)
+	case ModalUpdate:
+		if !m.updateConfirmed {
+			m.closeModal()
+			return m, formCmd
 		}
-		content = m.list.View() + "\n" + helpStyle.Render(help+"  •  r refresh  •  q quit")
+		m.closeModal()
+		model, cmd := m.startUpdate()
+		return model, tea.Sequence(formCmd, cmd)
 	}
-	if m.busy {
-		total := max(1, m.current.total)
-		content += "\n\n" + m.progress.ViewAs(float64(m.current.current)/float64(total)) +
-			fmt.Sprintf("  %d/%d\n", m.current.current, m.current.total) +
-			m.spinner.View() + " " + m.current.phase + " " + m.current.label +
-			"\n" + helpStyle.Render("ctrl+c cancel")
-	}
-	view := tea.NewView(content)
-	view.AltScreen = true
-	return view
+	return m, formCmd
 }
 
-func (m Model) startDoctor() (tea.Model, tea.Cmd) {
-	checks := workspace.Diagnose(m.workspace.Root)
-	lines := make([]string, 0, len(checks))
-	for _, check := range checks {
-		marker := "✓"
-		if check.Status == workspace.CheckWarning {
-			marker = "!"
-		} else if check.Status == workspace.CheckFailure {
-			marker = "X"
-		}
-		lines = append(lines, fmt.Sprintf("%s %s: %s", marker, check.Name, check.Detail))
+func (m *Model) resize(width, height int) {
+	m.width, m.height = width, height
+	contentWidth := max(20, width-8)
+	contentHeight := max(5, height-6)
+	m.apps.resize(contentWidth, contentHeight)
+	m.help.SetWidth(contentWidth)
+	m.detailViewport.SetWidth(contentWidth)
+	m.detailViewport.SetHeight(max(3, height-7))
+	m.helpViewport.SetWidth(modalInnerWidth(width))
+	m.helpViewport.SetHeight(max(4, min(14, height-10)))
+	m.logViewport.SetWidth(contentWidth)
+	m.logViewport.SetHeight(contentHeight - 3)
+	m.progress.SetWidth(min(48, max(10, contentWidth-10)))
+	if m.form != nil {
+		m.form.WithWidth(modalInnerWidth(width)).WithHeight(formContentHeight(height))
 	}
-	m.title, m.body, m.err, m.screen = "Workspace doctor", strings.Join(lines, "\n"), nil, resultScreen
-	return m, nil
 }
 
-func (m Model) selected() (workspace.App, bool) {
-	item, ok := m.list.SelectedItem().(appItem)
-	return item.app, ok
+func (m *Model) applyTheme(theme Theme) {
+	m.theme = theme
+	m.help.Styles = theme.HelpStyles()
+	m.apps.setTheme(theme)
+	m.spinner.Style = theme.StatusWarning
+	m.progress = progress.New(progress.WithColors(theme.BrandColor, theme.AccentColor), progress.WithWidth(min(48, max(10, m.width-14))))
+	if m.form != nil {
+		m.form.WithTheme(theme.HuhTheme())
+	}
 }
 
-func (m Model) targets(all bool) ([]workspace.App, error) {
+func (m *Model) closeModal() {
+	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalNone, "", "", nil, nil
+}
+
+func (m *Model) showMessage(title, body string) {
+	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, body, nil, nil
+}
+
+func (m *Model) showError(title string, err error) {
+	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, "", err, nil
+}
+
+func (m Model) selectedApplication() (ApplicationView, bool) {
+	if route := m.currentRoute(); route.Kind == RouteApplication {
+		for _, app := range m.apps.all {
+			if app.App.Ref.Relative == route.AppID {
+				return app, true
+			}
+		}
+	}
+	return m.apps.selected()
+}
+
+func (m Model) targetApplications(all bool) ([]ApplicationView, error) {
 	if all {
-		if len(m.apps) == 0 {
+		if len(m.apps.all) == 0 {
 			return nil, errors.New("no applications found")
 		}
-		return append([]workspace.App(nil), m.apps...), nil
+		return append([]ApplicationView(nil), m.apps.all...), nil
 	}
-	app, ok := m.selected()
+	app, ok := m.selectedApplication()
 	if !ok {
 		return nil, errors.New("no application selected")
 	}
-	return []workspace.App{app}, nil
+	return []ApplicationView{app}, nil
 }
 
-func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
-	targets, err := m.targets(all)
-	if err != nil {
-		m.title, m.err, m.screen = "Validation failed", err, resultScreen
-		return m, nil
-	}
-	m.busy = true
-	operationContext := m.startActivity(len(targets))
-	work := func() tea.Msg {
-		defer close(m.activity)
-		valid := 0
-		var issues []string
-		for index, target := range targets {
-			m.emitActivity(activityEvent{current: index, total: len(targets), label: target.Label(), phase: "validating"})
-			select {
-			case <-operationContext.Done():
-				return operationMsg{title: "Validation cancelled", err: operationContext.Err()}
-			default:
-			}
-			app := m.workspace.Inspect(target.Ref)
-			if app.Status == "valid" {
-				valid++
-			} else {
-				issues = append(issues, fmt.Sprintf("%s: %s", app.Label(), app.Error))
-			}
-		}
-		body := fmt.Sprintf("%d valid, %d invalid", valid, len(issues))
-		if len(issues) > 0 {
-			body += "\n\n" + strings.Join(issues, "\n")
-		}
-		return operationMsg{title: "Validation finished", body: body}
-	}
-	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
+func (m *Model) openDiagnostics() {
+	m.diagnostics = workspace.Diagnose(m.root)
+	m.pushRoute(Route{Kind: RouteDiagnostics})
 }
 
-func (m Model) startBuild(all bool) (tea.Model, tea.Cmd) {
-	targets, err := m.targets(all)
-	if err != nil {
-		m.title, m.err, m.screen = "Build failed", err, resultScreen
-		return m, nil
-	}
-	refs := make([]workspace.AppRef, 0, len(targets))
-	for _, app := range targets {
-		refs = append(refs, app.Ref)
-	}
-	service := packager.Service{Workspace: m.workspace, Runner: m.runner}
-	if err := service.Validate(); err != nil {
-		m.title, m.err, m.screen = "Build unavailable", err, resultScreen
-		return m, nil
-	}
-	m.busy = true
-	operationContext := m.startActivity(len(targets))
-	work := func() tea.Msg {
-		defer close(m.activity)
-		var output bytes.Buffer
-		results, buildErr := service.Build(operationContext, refs, packager.BuildOptions{OnProgress: func(event packager.Event) {
-			m.emitActivity(activityEvent{current: event.Index - 1, total: event.Total, label: event.App, phase: event.Phase})
-		}}, &output, &output)
-		built, current := 0, 0
-		var failures []string
-		for _, result := range results {
-			if result.Err != nil {
-				failures = append(failures, fmt.Sprintf("%s: %v", result.App.Label(), result.Err))
-			} else if result.Status == packager.StatusCurrent {
-				current++
-			} else {
-				built++
-			}
-		}
-		body := fmt.Sprintf("%d built, %d up to date, %d failed", built, current, len(failures))
-		if len(failures) > 0 {
-			body += "\n\n" + strings.Join(failures, "\n")
-		}
-		if strings.TrimSpace(output.String()) != "" {
-			body += "\n\nTool output:\n" + strings.TrimSpace(output.String())
-		}
-		return operationMsg{title: "Build finished", body: body, err: buildErr}
-	}
-	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
-}
-
-func (m Model) startUnpack(all bool) (tea.Model, tea.Cmd) {
-	targets, err := m.targets(all)
-	if err != nil {
-		m.title, m.err, m.screen = "Unpack failed", err, resultScreen
-		return m, nil
-	}
-	service := unpacker.Service{DecoderPath: m.workspace.Config.DecoderPath, Runner: m.runner}
-	if err := service.Validate(); err != nil {
-		m.title, m.err, m.screen = "Unpack unavailable", err, resultScreen
-		return m, nil
-	}
-	m.busy = true
-	operationContext := m.startActivity(len(targets))
-	work := func() tea.Msg {
-		defer close(m.activity)
-		var failures, outputs []string
-		for index, app := range targets {
-			m.emitActivity(activityEvent{current: index, total: len(targets), label: app.Label(), phase: "decoding"})
-			if len(app.Packages) != 1 {
-				problem := "no .intunewin package found"
-				if len(app.Packages) > 1 {
-					problem = "multiple packages found; use the CLI with an explicit package path"
-				}
-				failures = append(failures, app.Label()+": "+problem)
-				continue
-			}
-			result := service.Unpack(operationContext, app.Packages[0], "", false, io.Discard, io.Discard)
-			if result.Err != nil {
-				failures = append(failures, fmt.Sprintf("%s: %v", app.Label(), result.Err))
-			} else {
-				outputs = append(outputs, result.Destination)
-			}
-		}
-		body := fmt.Sprintf("%d succeeded, %d failed", len(outputs), len(failures))
-		if len(outputs) > 0 {
-			body += "\n\nOutputs:\n" + strings.Join(outputs, "\n")
-		}
-		if len(failures) > 0 {
-			body += "\n\n" + strings.Join(failures, "\n")
-		}
-		return operationMsg{title: "Unpack finished", body: body}
-	}
-	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(), work)
-}
-
-func (m *Model) startActivity(total int) context.Context {
-	m.activityContext, m.cancelActivity = context.WithCancel(m.ctx)
-	m.activity = make(chan activityEvent)
-	m.current = activityEvent{total: total, phase: "starting"}
-	return m.activityContext
-}
-
-func (m Model) emitActivity(event activityEvent) {
-	select {
-	case m.activity <- event:
-	case <-m.activityContext.Done():
-	}
-}
-
-func (m Model) waitForActivity() tea.Cmd {
-	activity := m.activity
+func (m Model) refreshCmd(preferred string) tea.Cmd {
+	ws := m.workspace
 	return func() tea.Msg {
-		if activity == nil {
-			return activityClosedMsg{}
+		if ws == nil {
+			return inventoryMsg{err: errors.New("workspace is not initialized")}
 		}
-		event, ok := <-activity
-		if !ok {
-			return activityClosedMsg{}
-		}
-		return activityMsg(event)
-	}
-}
-
-func (m *Model) beginCreate() tea.Cmd {
-	m.create = &workspace.CreateOptions{Source: "source", OutputDir: m.workspace.DefaultOutputDir()}
-	m.form = huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("Application name").Value(&m.create.Name).Validate(func(value string) error {
-			if !workspace.ValidAppName(value) {
-				return errors.New("use a valid Windows directory name")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("Group").Description("Optional path below the applications directory").Value(&m.create.Group).Validate(func(value string) error {
-			if !workspace.ValidGroupName(value) {
-				return errors.New("use a relative path of valid Windows directory names")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("Display name").Value(&m.create.DisplayName),
-		huh.NewInput().Title("Source directory").Value(&m.create.Source).Validate(tuiSafePath),
-		huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(func(value string) error {
-			if strings.TrimSpace(value) == "" {
-				return errors.New("setup file is required")
-			}
-			return tuiSafePath(value)
-		}),
-		huh.NewInput().Title("Output directory").Value(&m.create.OutputDir).Validate(tuiSafePath),
-		huh.NewConfirm().Title("Create this application?").Affirmative("Create").Negative("Cancel").Validate(func(value bool) error {
-			if !value {
-				return errors.New("confirm creation or press esc to cancel")
-			}
-			return nil
-		}),
-	)).WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
-	m.screen = createScreen
-	return m.form.Init()
-}
-
-func (m *Model) beginUpdate() tea.Cmd {
-	m.updateConfirmed = false
-	description := fmt.Sprintf("Current: v%s\nAvailable: v%s\n%s", m.updateResult.CurrentVersion, m.updateResult.LatestVersion, m.updateResult.ReleaseURL)
-	m.form = huh.NewForm(huh.NewGroup(
-		huh.NewNote().Title("Update Inpakker").Description(description),
-		huh.NewConfirm().Title("Download, verify, and install this update?").Affirmative("Install").Negative("Cancel").Value(&m.updateConfirmed),
-	)).WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
-	m.screen = updateScreen
-	return m.form.Init()
-}
-
-func (m Model) updateCmd(ctx context.Context) tea.Cmd {
-	service := m.updater
-	activity := m.activity
-	activityContext := m.activityContext
-	return func() tea.Msg {
-		defer close(activity)
-		result, err := service.Check(ctx, false)
-		if err != nil {
-			return operationMsg{title: "Update failed", err: err}
-		}
-		if !result.Available {
-			return operationMsg{title: "Inpakker is up to date", body: "No newer stable release is available.", clearUpdate: true}
-		}
-		emit := func(event updater.Event) {
-			select {
-			case activity <- activityEvent{current: event.Current, total: event.Total, phase: event.Phase}:
-			case <-activityContext.Done():
-			}
-		}
-		if err := service.Install(ctx, result, emit); err != nil {
-			return operationMsg{title: "Update failed", err: err}
-		}
-		return operationMsg{
-			title:          "Inpakker updated",
-			body:           "Updated to v" + result.LatestVersion + ".\n\nRestart Inpakker to use the new version.",
-			updatedVersion: result.LatestVersion,
-			clearUpdate:    true,
-		}
+		apps, err := inspectApplications(ws)
+		return inventoryMsg{apps: apps, preferred: preferred, err: err}
 	}
 }
 
@@ -582,60 +667,4 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 		}
 		return updateCheckMsg{result: result}
 	}
-}
-
-func (m Model) createCmd() tea.Cmd {
-	options := *m.create
-	return func() tea.Msg {
-		ref, err := m.workspace.Create(options)
-		if err != nil {
-			return operationMsg{title: "Create failed", err: err}
-		}
-		return operationMsg{title: "Application created", body: ref.Relative}
-	}
-}
-
-func tuiSafePath(value string) error {
-	if value == "" || !pathutil.IsSafeRelative(value) {
-		return errors.New("path must remain within the application directory")
-	}
-	return nil
-}
-
-func (m Model) refreshCmd() tea.Cmd {
-	return func() tea.Msg {
-		apps, err := m.workspace.List()
-		return refreshMsg{apps: apps, err: err}
-	}
-}
-
-func detailBody(app workspace.App) string {
-	lines := []string{
-		"Path: " + app.Ref.Relative,
-		"Status: " + app.Status,
-		fmt.Sprintf("Packages: %d", len(app.Packages)),
-	}
-	if app.Config != nil {
-		lines = append(lines,
-			"Display name: "+app.Config.DisplayName,
-			"Source: "+app.Config.Source,
-			"Setup file: "+app.Config.SetupFile,
-			"Output directory: "+app.Config.OutputDir,
-		)
-	}
-	if app.Error != "" {
-		lines = append(lines, "Issue: "+app.Error)
-	}
-	if len(app.Packages) > 0 {
-		lines = append(lines, "", "Package files:", strings.Join(app.Packages, "\n"))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func toItems(apps []workspace.App) []list.Item {
-	items := make([]list.Item, 0, len(apps))
-	for _, app := range apps {
-		items = append(items, appItem{app: app})
-	}
-	return items
 }
