@@ -50,14 +50,32 @@ func promptSetup(cmd *cobra.Command, options *workspace.SetupOptions) error {
 	return runForm(cmd, huh.NewForm(
 		huh.NewGroup(
 			huh.NewNote().Title("Welcome to Inpakker").Description("Set up a workspace for packaging Win32 applications for Microsoft Intune."),
+			huh.NewNote().Title("1 of 4 · Workspace"),
 			huh.NewInput().Title("Workspace directory").Value(&options.Root).Validate(huh.ValidateNotEmpty()),
 			huh.NewInput().Title("Applications directory").Value(&options.AppsDir).Validate(safeWorkspacePath),
 			huh.NewInput().Title("Default output directory").Value(&options.OutputDir).Validate(safeWorkspacePath),
 		),
 		huh.NewGroup(
+			huh.NewNote().Title("2 of 4 · Packaging utility"),
 			huh.NewInput().Title("IntuneWinAppUtil.exe").Description("Full path; may be left empty and configured later").Value(&options.IntuneWinAppUtil).Validate(optionalAbsolutePath),
-			huh.NewInput().Title("IntuneWinAppUtilDecoder.exe").Description("Optional full path; enables unpacking").Value(&options.DecoderPath).Validate(optionalAbsolutePath),
 			huh.NewConfirm().Title("Mute output from the packaging utility?").Value(&options.MuteUtility),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("3 of 4 · Optional decoder").Description("The decoder is only required for unpacking .intunewin files."),
+			huh.NewInput().Title("IntuneWinAppUtilDecoder.exe").Description("Optional full path; enables unpacking").Value(&options.DecoderPath).Validate(optionalAbsolutePath),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("4 of 4 · Review").DescriptionFunc(func() string {
+				utility := options.IntuneWinAppUtil
+				if utility == "" {
+					utility = "Configure later"
+				}
+				decoder := options.DecoderPath
+				if decoder == "" {
+					decoder = "Not configured"
+				}
+				return fmt.Sprintf("Workspace          %s\nApplications       %s\nOutput             %s\nPackaging utility  %s\nDecoder            %s", options.Root, options.AppsDir, options.OutputDir, utility, decoder)
+			}, options),
 			huh.NewConfirm().Title("Create a valid PowerShell example application?").Affirmative("Yes").Negative("No").Value(&options.CreateExample),
 		),
 	))

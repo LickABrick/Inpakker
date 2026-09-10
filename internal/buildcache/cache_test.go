@@ -80,6 +80,19 @@ func TestCacheRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGetReturnsAnIndependentEntry(t *testing.T) {
+	cache := empty()
+	cache.Apps["app"] = Entry{Fingerprint: "abc", Artifacts: []string{"output/app.intunewin"}}
+	entry, ok := cache.Get("app")
+	if !ok {
+		t.Fatal("Get did not find the entry")
+	}
+	entry.Artifacts[0] = "changed"
+	if cache.Apps["app"].Artifacts[0] != "output/app.intunewin" {
+		t.Fatal("Get exposed the cache's artifact slice")
+	}
+}
+
 func writeFile(t *testing.T, path, value string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
