@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/LickABrick/inpakker/internal/buildcache"
+	"github.com/LickABrick/inpakker/internal/pathutil"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
@@ -75,16 +76,22 @@ func (s Service) Validate() error {
 	}
 	path := s.utilityPath()
 	if strings.TrimSpace(path) == "" {
-		return errors.New("intunewinapputil is not configured")
+		return errors.New("Content Prep Tool is not configured; use 'inpakker tools detect' or 'tools install content-prep'")
 	}
-	return workspace.EnsureFile(path, "intunewinapputil")
+	return workspace.EnsureFile(path, "Content Prep Tool")
 }
 
 func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options BuildOptions, stdout, stderr io.Writer) ([]Result, error) {
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	cacheDirectory, err := s.Workspace.CacheDirectory()
+	if err != nil {
+		return nil, err
+	}
 	var cache *buildcache.Cache
-	var err error
 	if !options.NoCache {
-		cache, err = buildcache.Load(s.Workspace.Root)
+		cache, err = buildcache.Load(cacheDirectory)
 		if err != nil {
 			return nil, err
 		}
@@ -108,13 +115,16 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 			results = append(results, result)
 			continue
 		}
-		fingerprint, err := buildcache.Fingerprint(ref.Path, app.Config, outputPath, s.utilityPath())
+		fingerprint := ""
+		if cache != nil {
+			fingerprint, err = buildcache.Fingerprint(ref.Path, &app.Effective.AppConfig, outputPath, s.utilityPath())
+		}
 		if err != nil {
 			result.Status, result.Err = StatusFailed, err
 			results = append(results, result)
 			continue
 		}
-		cacheKey := filepath.ToSlash(ref.Relative)
+		cacheKey := app.Config.ID
 		if !options.Force && cache != nil && cache.Current(cacheKey, fingerprint, ref.Path) {
 			result.Status, result.Reason = StatusCurrent, "inputs and output are unchanged"
 			result.Artifacts = append([]string(nil), app.Packages...)
@@ -128,11 +138,11 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		}
 		emit(options, Event{Index: index + 1, Total: len(refs), App: app.Label(), Phase: "packaging"})
 		var processOut, processErr io.Writer
-		if !s.Workspace.Config.MuteIntuneWinAppUtil {
+		if s.Workspace.User.Preferences.ShowToolOutput {
 			processOut, processErr = stdout, stderr
 		}
 		err = s.Runner.Run(ctx, s.utilityPath(), []string{
-			"-c", filepath.Join(ref.Path, app.Config.Source),
+			"-c", filepath.Join(ref.Path, pathutil.Native(app.Effective.SourceDirectory)),
 			"-s", app.Config.SetupFile,
 			"-o", outputPath,
 			"-q",
@@ -159,7 +169,7 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 			if err := cache.Set(cacheKey, fingerprint, ref.Path, artifacts); err != nil {
 				return results, err
 			}
-			if err := cache.Save(s.Workspace.Root); err != nil {
+			if err := cache.Save(cacheDirectory); err != nil {
 				return results, err
 			}
 		}
@@ -168,7 +178,7 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 }
 
 // InspectBuildState calculates the same fingerprint and cache state used by a
-// smart build, without creating directories, invoking the packaging utility,
+// build, without creating directories, invoking the packaging utility,
 // or writing the cache.
 func (s Service) InspectBuildState(ref workspace.AppRef) BuildInspection {
 	if s.Workspace == nil {
@@ -186,22 +196,26 @@ func (s Service) InspectBuildState(ref workspace.AppRef) BuildInspection {
 	if strings.TrimSpace(utility) == "" {
 		return BuildInspection{State: BuildStateUnavailable, Reason: "packaging utility is not configured"}
 	}
-	if err := workspace.EnsureFile(utility, "intunewinapputil"); err != nil {
+	if err := workspace.EnsureFile(utility, "Content Prep Tool"); err != nil {
 		return BuildInspection{State: BuildStateUnavailable, Reason: err.Error()}
 	}
 	outputPath, err := s.Workspace.OutputDir(ref, app.Config)
 	if err != nil {
 		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
 	}
-	fingerprint, err := buildcache.Fingerprint(ref.Path, app.Config, outputPath, utility)
+	fingerprint, err := buildcache.Fingerprint(ref.Path, &app.Effective.AppConfig, outputPath, utility)
 	if err != nil {
 		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
 	}
-	cache, err := buildcache.Load(s.Workspace.Root)
+	cacheDirectory, err := s.Workspace.CacheDirectory()
 	if err != nil {
 		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
 	}
-	key := filepath.ToSlash(ref.Relative)
+	cache, err := buildcache.Load(cacheDirectory)
+	if err != nil {
+		return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
+	}
+	key := app.Config.ID
 	entry, ok := cache.Get(key)
 	if !ok {
 		return BuildInspection{State: BuildStateNotBuilt, Reason: "no successful cached build"}
@@ -220,12 +234,7 @@ func (s Service) InspectBuildState(ref workspace.AppRef) BuildInspection {
 	return BuildInspection{State: BuildStateNeedsBuild, Reason: reason, Artifacts: artifacts}
 }
 
-func (s Service) utilityPath() string {
-	if s.Workspace.Config.IntuneWinAppUtil != "" {
-		return s.Workspace.Config.IntuneWinAppUtil
-	}
-	return s.Workspace.Config.IntuneWinAppUtilPath
-}
+func (s Service) utilityPath() string { return s.Workspace.User.Tools.ContentPrepTool.Path }
 
 func emit(options BuildOptions, event Event) {
 	if options.OnProgress != nil {

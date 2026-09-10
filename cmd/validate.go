@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +26,7 @@ func newValidateCmd() *cobra.Command {
 }
 
 func runValidate(cmd *cobra.Command, args []string, all bool) error {
-	ws, err := workspace.Open(".")
+	ws, err := resolveWorkspace(cmd)
 	if err != nil {
 		return err
 	}

@@ -33,12 +33,9 @@ func Diagnose(root string) []Check {
 	} else {
 		checks = append(checks, Check{Name: "Applications directory", Status: CheckOK, Detail: ws.AppsDir()})
 	}
-	utility := ws.Config.IntuneWinAppUtil
-	if utility == "" {
-		utility = ws.Config.IntuneWinAppUtilPath
-	}
-	checks = append(checks, executableCheck("Packaging utility", utility, false))
-	checks = append(checks, executableCheck("Decoder", ws.Config.DecoderPath, true))
+	checks = append(checks, executableCheck("Content Prep Tool", ws.User.Tools.ContentPrepTool.Path, false))
+	checks = append(checks, executableCheck("Package decoder · Optional", ws.User.Tools.Decoder.Path, true))
+	checks = append(checks, Check{Name: "Inpakker configuration", Status: CheckOK, Detail: "Global user settings"})
 	apps, err := ws.List()
 	if err != nil {
 		checks = append(checks, Check{Name: "Applications", Status: CheckFailure, Detail: err.Error()})

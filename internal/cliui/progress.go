@@ -12,10 +12,11 @@ import (
 )
 
 type Event struct {
-	Current int
-	Total   int
-	Label   string
-	Phase   string
+	Completed int
+	Current   int
+	Total     int
+	Label     string
+	Phase     string
 }
 
 type Work func(context.Context, func(Event)) (any, error)
@@ -101,13 +102,13 @@ func (m progressModel) View() tea.View {
 	if total < 1 {
 		total = 1
 	}
-	percent := float64(m.event.Current) / float64(total)
+	percent := float64(m.event.Completed) / float64(total)
 	line := fmt.Sprintf("%s %s", m.spinner.View(), m.event.Phase)
 	if m.event.Label != "" {
 		line += " " + m.event.Label
 	}
 	content := lipgloss.NewStyle().Bold(true).Render(m.title) + "\n" +
-		m.progress.ViewAs(percent) + fmt.Sprintf("  %d/%d\n", m.event.Current, m.event.Total) + line
+		m.progress.ViewAs(percent) + fmt.Sprintf("  %d of %d\n", m.event.Current, m.event.Total) + line
 	return tea.NewView(content)
 }
 

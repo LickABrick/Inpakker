@@ -4,238 +4,191 @@
 
 # Inpakker
 
-[![Release](https://img.shields.io/github/v/release/LickABrick/Inpakker?display_name=tag&sort=semver)](https://github.com/LickABrick/Inpakker/releases/latest)
-[![CI](https://github.com/LickABrick/Inpakker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/LickABrick/Inpakker/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-Inpakker is a Windows command-line and terminal application for organizing,
-validating, packaging, and inspecting Win32 applications for Microsoft Intune.
-It gives you a guided interface for everyday work while keeping every operation
-available as a scriptable command.
-
-## Features
-
-- Guided workspace setup and application creation.
-- Polished terminal dashboard with separate validation, build, and package state.
-- Inline fuzzy search, structured details, diagnostics, and contextual help.
-- Staged setup and application-creation wizards.
-- CLI commands suitable for PowerShell scripts and automation.
-- Application groups for organizing larger packaging collections.
-- Validation before packaging, with actionable error messages.
-- Incremental builds that automatically skip unchanged applications.
-- Batch build, validation, and unpack operations with progress reporting.
-- JSON output for inventory and diagnostic automation.
-- Optional `.intunewin` unpacking through a separately installed decoder.
-- Signed, checksum-verified application updates from GitHub Releases.
-
-## Requirements
-
-- A 64-bit Windows system.
-- [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool),
-  downloaded separately.
-- Windows Terminal or another modern terminal is recommended for the interactive
-  interface.
-
-Inpakker calls Microsoft's `IntuneWinAppUtil.exe` to create packages. It does
-not reimplement or redistribute Microsoft's packaging tool.
+Inpakker organizes, validates, builds and unpacks Win32 application packages for
+Microsoft Intune. Install it once, then manage independent packaging workspaces
+from a terminal or PowerShell scripts. Windows AMD64 is supported.
 
 ## Install
 
-1. Download the Windows AMD64 ZIP and checksum manifest from the
-   [latest release](https://github.com/LickABrick/Inpakker/releases/latest).
-2. Verify the downloaded ZIP against the SHA-256 checksum manifest:
-
-   ```powershell
-   Get-FileHash .\inpakker_*_windows_amd64.zip -Algorithm SHA256
-   ```
-
-3. Extract `inpakker.exe` to a directory of your choice.
-4. Either run it using its full path or add that directory to your user `PATH`.
-
-The version in the example filename changes with each release. Release checksum
-manifests are cryptographically signed, and Inpakker verifies both the signature
-and checksum before installing an update.
-
-## Quick start
-
-Open Windows Terminal in the directory where you want to keep your application
-workspace and run:
+Run in PowerShell (no administrator privileges required):
 
 ```powershell
+irm https://raw.githubusercontent.com/LickABrick/Inpakker/master/install.ps1 | iex
+inpakker --version
 inpakker
 ```
 
-The staged setup wizard asks where `IntuneWinAppUtil.exe` is installed, creates
-the workspace structure, and can add a harmless PowerShell example package.
-Check the result and build the example:
+The installer verifies the release's signed checksum manifest and archive SHA-256,
+installs into `%LOCALAPPDATA%\Programs\Inpakker`, and updates your user and current
+process PATH. Re-running it installs the latest stable release without duplicate
+PATH entries. Download the script to use `-Version`, `-InstallDir`, or `-Force`.
+
+## Quick start
+
+The terminal interface offers **Create workspace** and **Add existing workspace**.
+Tools can be configured later. The equivalent CLI workflow is:
 
 ```powershell
-inpakker doctor
-inpakker build example
+inpakker workspace create D:\Intune\ADS --name "ADS Groep"
+inpakker tools detect
+inpakker tools install content-prep --accept-license
+inpakker new "Mozilla Firefox" --group Browsers --setup-file "Firefox Setup.exe" --no-input
+inpakker open "Mozilla Firefox"
 ```
 
-Run `inpakker` without arguments to open the terminal interface.
+Place the installer in the application's `source` directory, then run:
+
+```powershell
+inpakker validate
+inpakker build "Mozilla Firefox"
+```
+
+Inpakker invokes the [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool).
+It downloads tools directly from their official upstream repositories after
+license acceptance; tools are not bundled. You may instead configure your own:
+
+```powershell
+inpakker tools set content-prep C:\Tools\IntuneWinAppUtil.exe
+```
+
+## Workspaces
+
+A workspace is an independent packaging environment with a human-readable name.
+Run Inpakker from anywhere. Workspace resolution uses, in order:
+
+1. `--workspace <name-or-path>`
+2. `INPAKKER_WORKSPACE`
+3. A workspace in the current directory or a parent directory
+4. The globally active workspace
+
+Discovered workspaces are not automatically registered.
+
+```powershell
+inpakker workspace add D:\Existing\Packaging
+inpakker workspace list
+inpakker workspace use "ADS Groep"
+inpakker --workspace "ADS Groep" build --all
+inpakker workspace relink "ADS Groep" E:\Intune\ADS
+inpakker workspace remove "ADS Groep" --yes
+```
+
+Remove only removes registration. Workspace folders, sources, packages and
+configuration remain intact. Relink requires the same workspace identity.
 
 ## Common tasks
 
 | Task | Command |
 | --- | --- |
-| Open the terminal interface | `inpakker` or `inpakker tui` |
-| Initialize a workspace | `inpakker setup` |
-| Check workspace health | `inpakker doctor` |
-| Create an application | `inpakker new myapp` |
-| List applications | `inpakker list` |
-| View application details | `inpakker show myapp` |
-| Validate all applications | `inpakker validate` |
-| Build an application | `inpakker build myapp` |
-| Build everything | `inpakker build --all` |
-| Force a clean rebuild | `inpakker build --all --force` |
-| Unpack an application package | `inpakker unpack myapp` |
-| Check for an Inpakker update | `inpakker update --check` |
+| Open the interface | `inpakker` or `inpakker tui` |
+| Inspect workspace | `inpakker workspace show` |
+| Inspect applications | `inpakker list --json` |
+| Show effective app settings | `inpakker show "Mozilla Firefox" --json` |
+| Diagnose workspace and tools | `inpakker doctor` |
+| Create application | `inpakker new "Mozilla Firefox" --setup-file setup.exe --no-input` |
+| Build a group | `inpakker build Browsers` |
+| Rebuild everything | `inpakker build --all --force` |
+| Build without cache | `inpakker build --all --no-cache` |
+| Open workspace folder | `inpakker open` |
+| Open application folder | `inpakker open "Mozilla Firefox"` |
+| Inspect global settings | `inpakker config show` |
+| Change workspace output | `inpakker config set --workspace-settings outputDirectory packages` |
+| Check updates | `inpakker update --check` |
 
-Commands that need an application will offer an interactive selector when used
-in a terminal. Use `--no-input` where available to disable prompts in scripts.
-Run `inpakker <command> --help` for all options.
+Human names can contain spaces. Application directory names are generated from
+names, or specified with `--directory-name`. Nested groups and canonical targets
+such as `Microsoft/Office/microsoft-365-apps` are supported. Ambiguous names
+produce an error listing the canonical targets.
+
+**Build** skips unchanged applications and updates the cache on success.
+**Rebuild** (`--force`) always packages and updates the cache.
+**Build without cache** (`--no-cache`) neither reads nor writes the cache.
 
 ## Terminal interface
 
-The TUI opens to an Applications dashboard. Its responsive table shows
-validation, cached build state, and package count separately. Press `/` to
-search, `Enter` for structured application details, `n` to create an app, or
-`d` for workspace diagnostics. Build, validation, unpack, and secure update
-workflows use consistent progress and result views.
+The shell shows **📦 INPAKKER**, the workspace name and its path. Press `w` for
+Workspaces, `s` for Settings, `i` for About, and `?` for help. About contains the
+version, update checks and update installation.
 
-The footer shows the most useful actions for the current page; press `?` for
-the complete shortcut guide. `Backspace` returns to the previous page, while
-`Esc` cancels a form, closes a dialog, or exits search. During an operation,
-`Ctrl+C` cancels that work without quitting Inpakker.
+On Applications, `/` searches, `Enter` opens details, `n` creates an application,
+`b` builds, `B` opens build options, `v` validates and `u` unpacks. `Ctrl+B`,
+`Ctrl+V` and `Ctrl+U` operate on all applications. `o` opens the selected
+application's root folder in Explorer; on Workspaces it opens the highlighted
+workspace without switching. `r` refreshes in the background.
 
-Every TUI operation has a CLI equivalent. Raw configuration editing and
-destructive workspace operations are intentionally left to your editor and
-version-control workflow.
+Creation uses one form with inherited source/output settings and a group
+selector. Forms use arrows, Tab and Shift+Tab; Esc cancels. F2 browses paths in
+workspace/tool dialogs, with manual entry always available. Backspace edits a
+focused input before navigating back. Ctrl+C cancels an active operation.
 
-See the [TUI guide](docs/tui.md) for the full key map and workflow details.
-For screen-reader-friendly Huh forms, set either `INPAKKER_ACCESSIBLE=1` or
-`ACCESSIBLE=1` when using the interactive `setup` and `new` commands. Critical
-state never depends on color alone.
+Use `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` for plain branding and accessible
+CLI forms. Critical state always has a text/symbol label. See [TUI guide](docs/tui.md).
 
-## Workspace
+## Configuration and files
 
-An Inpakker workspace keeps the global configuration and all application source
-files together:
+Machine-specific data lives under `%LOCALAPPDATA%\Inpakker` (`INPAKKER_HOME`
+overrides this for development/tests):
 
 ```text
-workspace/
-  inpakker.config.json
-  apps/
-    example/
-      app.config.json
-      source/
-        install.ps1
+Inpakker/
+  config.json
+  tools/
+  state/workspaces/<workspace UUID>/build-cache.json
+  update/state.json
 ```
 
-Applications may also be placed in group directories such as
-`apps/browsers/firefox`. Paths in configuration files are relative to their
-workspace or application directory.
+Portable workspace data:
 
-Example global configuration:
-
-```json
-{
-  "intunewinapputil": "C:\\Tools\\IntuneWinAppUtil.exe",
-  "decoderPath": "C:\\Tools\\IntuneWinAppUtilDecoder.exe",
-  "defaultOutputDir": "output",
-  "appsDir": "apps",
-  "muteIntuneWinAppUtil": false
-}
+```text
+ADS/
+  inpakker.workspace.json
+  apps/Browsers/mozilla-firefox/
+    inpakker.app.json
+    source/Firefox Setup.exe
+    output/Firefox Setup.intunewin
 ```
 
-See [Configuration](docs/configuration.md) for every setting and unattended
-setup examples.
-
-## Building applications
-
-Build one or more applications or a complete group:
-
-```powershell
-inpakker build firefox 7zip
-inpakker build browsers
-inpakker build --all
-```
-
-Inpakker tracks the inputs used for a successful package. Running the same build
-again reports unchanged applications as up to date. Use `--force` when you
-intentionally need to recreate packages, or `--no-cache` for a one-off build
-that should not use or change the saved build state.
+Each workspace owns its applications, source and output directory defaults.
+Global defaults seed new workspaces. Applications inherit source/output settings
+unless they explicitly override them. Changing directory settings never moves
+existing files. See [Configuration](docs/configuration.md).
 
 ## Optional unpacking
 
-Unpacking is provided through Oliver Kieselbach's external
-[IntuneWinAppUtilDecoder project](https://github.com/okieselbach/Intune/tree/master/IntuneWinAppUtilDecoder).
-Review and obtain that third-party tool separately from its checked-in
-[`bin/Release` folder](https://github.com/okieselbach/Intune/tree/master/IntuneWinAppUtilDecoder/IntuneWinAppUtilDecoder/bin/Release),
-then set `decoderPath` to the full path of
-`IntuneWinAppUtilDecoder.exe`. Inpakker does not bundle or redistribute it.
+Install Oliver Kieselbach's [Package decoder](https://github.com/okieselbach/Intune/tree/master/IntuneWinAppUtilDecoder)
+from upstream, or configure an existing executable:
 
 ```powershell
-inpakker unpack browsers/firefox
+inpakker tools install decoder --accept-license
+inpakker unpack "Mozilla Firefox"
 inpakker unpack C:\Packages\firefox.intunewin --destination C:\Decoded\firefox
-inpakker unpack --all
 ```
 
-Existing destinations are preserved unless `--force` is supplied. Decoder work
-is isolated in a temporary directory, and unsafe paths in its resulting archive
-are rejected.
+Decoder execution is isolated and its ZIP output is checked for unsafe paths.
+An existing extraction destination requires `--force`. Source means packaging
+inputs, output means generated packages, and destination means extracted files.
+Install/uninstall commands in application JSON are metadata, never executed.
 
-## Updates
+## Updates and uninstall
 
-The CLI and TUI check GitHub Releases at most once every 24 hours. Ordinary CLI
-commands only show a short notice when a newer stable version is available;
-nothing is downloaded or installed automatically. No usage telemetry is
-collected.
+Automatic update checks are limited to once per 24 hours. Installation requires
+confirmation (`inpakker update`) or `inpakker update --yes` for automation.
+`--check` and `--json` never install. Updates verify the trusted manifest
+signature and artifact checksum. Set `INPAKKER_NO_UPDATE_CHECK=1` to disable
+automatic checks; explicit checks remain available. Development builds cannot
+replace themselves.
 
 ```powershell
-inpakker update --check
-inpakker update
-inpakker update --yes
-inpakker update --json
+irm https://raw.githubusercontent.com/LickABrick/Inpakker/master/uninstall.ps1 | iex
 ```
 
-`inpakker update` shows the available version and release page, asks for
-confirmation, downloads the matching release, verifies its cryptographic
-signature and SHA-256 checksum, then replaces the executable with rollback
-protection. Restart Inpakker after a successful update.
+Uninstall removes the executable and its user PATH entry while preserving global
+settings and workspaces. Download the script and run with `-Purge` to remove
+global settings/tools/state as well. Workspace folders are always preserved;
+purge refuses directories containing or overlapping workspace data.
 
-Set `INPAKKER_NO_UPDATE_CHECK=1` to disable automatic daily checks. Explicit
-`inpakker update` commands continue to work. Automatic checks are skipped for
-JSON output, redirected automation, help, completion, and development builds.
+## Help and license
 
-## Troubleshooting
-
-Start with:
-
-```powershell
-inpakker doctor
-```
-
-It checks the workspace, external tools, and application configurations. Use
-`inpakker doctor --json` when collecting the result in automation. See the
-[troubleshooting guide](docs/troubleshooting.md) for common packaging, path,
-permission, terminal, and update issues.
-
-## Security and external tools
-
-Please report suspected vulnerabilities privately as described in
-[SECURITY.md](SECURITY.md). Do not include proprietary application packages,
-credentials, tenant information, or sensitive logs in a public issue.
-
-Microsoft Windows and Microsoft Intune are trademarks of Microsoft Corporation.
-Inpakker is an independent project and is not affiliated with or endorsed by
-Microsoft. External tools remain subject to their own terms and licenses.
-
-## Contributing and license
-
-Bug reports and focused contributions are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-
-Inpakker is available under the [MIT License](LICENSE).
+Run `inpakker <command> --help` or consult [Troubleshooting](docs/troubleshooting.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and the [MIT License](LICENSE).
+Inpakker is independent of Microsoft; external tools retain their own licenses.
+No Graph/Entra authentication, Intune uploads or telemetry are implemented.

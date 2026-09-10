@@ -18,12 +18,15 @@ terminal-aware presentation.
 - `cmd/`: CLI commands, process exit behavior, and the TUI entry point. Keep
   commands thin and call reusable internal services.
 - `cmd/output.go`: shared, terminal-aware command presentation.
-- `internal/config/`: JSON file loaders.
+- `internal/config/`: Schema validation, typed settings, user home resolution and configuration I/O.
+- `internal/atomicfile/`: flushed atomic writes with Windows replacement support.
+- `internal/toolmanager/`: deterministic global tool detection and official upstream downloads.
+- `internal/pathopener/`: injectable shell-free Windows Explorer launch.
 - `internal/buildcache/`: versioned build cache and deterministic input
   fingerprinting.
 - `internal/cliui/`: reusable interactive CLI progress rendering.
 - `internal/workspace/`: workspace discovery, inspection, validation, package
-  lookup, and application scaffolding.
+  lookup, registry/resolver, effective application settings and application scaffolding.
 - `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
 - `internal/unpacker/`: isolated external decoder execution and secure archive
   extraction.
@@ -34,10 +37,10 @@ terminal-aware presentation.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
 - `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
   application, `navigation.go` and `keymap.go` define routes/input precedence,
-  `inventory.go` owns table/search state, `forms.go` defines staged Huh dialogs,
+  `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs, `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
   `operations.go` runs cancellable services, and `render.go` composes the shell
   and pages using the centralized styles in `theme.go`.
-- `types/types.go`: JSON-backed global and application configuration types.
+- `types/types.go`: JSON-backed user, workspace and application configuration types.
 - `README.md`: concise end-user installation, features, and common workflows.
 - `docs/`: detailed end-user configuration, TUI, and troubleshooting references.
 - `CONTRIBUTING.md` and `SECURITY.md`: public contribution and vulnerability
@@ -48,7 +51,7 @@ incremental builds and read-only build-state inspection, usage errors,
 onboarding, TUI routing/input/responsive states, packaging failures, scaffold
 safety, decoder isolation, ZIP extraction safety, update caching, release
 discovery, and signed update verification. There is no checked-in example
-workspace. GitHub Actions runs tests on Linux and Windows, and GoReleaser
+workspace. GitHub Actions runs Go tests on Linux and Windows and isolated PowerShell installer tests on Windows. GoReleaser
 publishes tagged releases.
 
 ## Git workflow
@@ -68,6 +71,7 @@ Development follows version branches rather than merging feature work directly
 into `master`:
 
 - `master` represents released, production-ready code.
+- The active development line is `release/v0.4`; dependency updates target it.
 - Create a `release/vX.Y` branch for the next planned minor or major release.
   Patch-only release branches may use `release/vX.Y.Z` when they must be prepared
   independently of the next release line.
@@ -107,6 +111,12 @@ packages. Add focused unit tests for new parsing, validation, discovery, or path
 logic. Keep tests independent of installed `IntuneWinAppUtil.exe` and
 `IntuneWinAppUtilDecoder.exe` binaries; inject or isolate process execution.
 
+Installer/uninstaller tests run with `powershell -File tests/installer.ps1` on
+Windows using temporary directories. Never test against a real user installation
+or PATH. `install.ps1` embeds the same public signing certificate as the updater;
+update both together if release trust changes. No private signing material belongs
+in this repository. The uninstaller must preserve workspaces even with `-Purge`.
+
 The packaging and unpacking integrations can only be exercised where their
 configured Windows executables are available. Do not treat inability to run
 those external executables on Linux as a product failure. Do not commit
@@ -122,7 +132,8 @@ separately and do not claim the checks passed.
 
 Use Semantic Versioning (`MAJOR.MINOR.PATCH`):
 
-- increment `MAJOR` for incompatible CLI, configuration, or workspace changes;
+- before v1.0.0, a MINOR release may intentionally contain breaking CLI, configuration or workspace changes;
+- after v1.0.0, incompatible public behavior requires a MAJOR increment;
 - increment `MINOR` for backward-compatible functionality;
 - increment `PATCH` for backward-compatible fixes.
 
@@ -157,92 +168,88 @@ and may not replace themselves.
 
 ## CLI behavior and workspace model
 
-Commands expect to run from an Inpakker workspace root. The global config file
-is named `inpakker.config.json`. A typical workspace contains an apps root and
-one `app.config.json` per package:
+Inpakker is installed once per user under `%LOCALAPPDATA%\Programs\Inpakker`.
+User settings, managed tools, build state and update cache live under
+`%LOCALAPPDATA%\Inpakker`; `INPAKKER_HOME` overrides this for development/tests.
+Portable workspaces contain `inpakker.workspace.json`, an applications directory,
+and `inpakker.app.json` beneath each application root. v0.4 deliberately replaces
+the v0.3 formats; no compatibility aliases or automatic migrations are retained.
 
-```text
-workspace/
-  inpakker.config.json
-  apps/
-    example/
-      app.config.json
-      source/
-```
-
-Preserve these current semantics unless a change explicitly intends to revise
-them:
-
-- `build` loads `inpakker.config.json` from the current working directory.
-- `build --all` recursively finds `app.config.json` below the configured
-  `appsDir` and skips directories whose path ends in `.git`.
-- Named build targets are relative to `appsDir`. A target can be an app or a
-  group containing apps as immediate child directories.
-- Target, source, setup, and output paths may not escape their documented roots.
-- An app's `outputDir` overrides the global `defaultOutputDir`; the fallback is
-  `output`.
-- `intunewinapputil` is the documented global JSON key. The legacy
-  `intuneWinAppUtilPath` key is also accepted as a fallback.
-- `muteIntuneWinAppUtil` controls whether the wrapped tool inherits stdout and
-  stderr.
-- `decoderPath` points to a separately installed
-  `IntuneWinAppUtilDecoder.exe`; no decoder binary is embedded or distributed.
-- `new` scaffolds under the configured `appsDir`, optionally beneath a safe
-  group path, and must not overwrite an existing app config.
-- `validate` recursively scans the configured `appsDir` and checks config
-  fields, safe relative paths, source directories, and setup files. Invalid
-  applications produce a non-zero exit status.
-- `build` and `validate` print one detail line per failed application followed
-  by a count summary. Build successes may use one concise check line; unchanged
-  and missing targets are aggregated. Any application failure produces a
-  non-zero exit status.
-- `build` fingerprints configuration, source names/content, and packaging-tool
-  identity. It skips only when the versioned cache matches and every recorded
-  artifact still exists. `--force` bypasses the match and updates the cache;
-  `--no-cache` bypasses cache reads and writes. Failed builds do not update it.
-- `list` and `show` expose workspace/app inspection and offer JSON where
-  applicable. `unpack` accepts app/group targets or direct `.intunewin` paths,
-  isolates decoder side effects in a temporary directory, and securely extracts
-  its decoded ZIP result.
-- With no arguments, an interactive terminal opens the TUI; non-interactive
-  invocation prints help. `tui` opens it explicitly. Every TUI action must have
-  a non-interactive CLI command/flag equivalent. The TUI intentionally excludes
-  delete, rename, and raw config editing.
-- TUI rendering operates only on inspected in-memory inventory. Refresh it on
-  initial load, explicit refresh, and after create/build/validate/unpack; never
-  perform filesystem or network work from `View()`.
-- TUI input priority is window events, active operation, modal/form/input, page,
-  then global actions. Backspace belongs to focused inputs before route
-  navigation, and Ctrl+C cancels an active operation without quitting the TUI.
-- `setup` initializes the config and directories and creates a valid PowerShell
-  example unless `--no-example` is used. `doctor` performs read-only workspace
-  checks. A missing config encountered during interactive TUI startup launches
-  setup rather than returning an unassisted file error.
-- `update` works outside a workspace. `--check` never installs, `--yes` permits
-  non-interactive installation, and `--json` is check-only and never prompts.
-  The CLI and TUI share a per-user update cache and make at most one automatic
-  GitHub check per 24 hours. Ordinary check failures stay silent, automatic
-  checks never affect command success, and `INPAKKER_NO_UPDATE_CHECK=1` disables
-  them. Installation always re-fetches release metadata and verifies the signed
-  checksum before replacing the executable.
-
-When changing path or discovery behavior, cover absolute/relative paths,
-missing files, groups, nested apps, and platform-specific separators. Use
-`filepath` rather than manual path concatenation.
+- Every workspace-dependent entry point uses the central resolver: explicit
+  `--workspace`, `INPAKKER_WORKSPACE`, current/parent discovery, active registration,
+  then no workspace. Discovered workspaces are never silently registered.
+- Workspace/application UUIDs are generated internally and stable across location
+  or display-name changes. Registrations contain UUID, path and last-opened time;
+  portable workspace JSON owns the authoritative name. Names may contain spaces.
+- `workspace create/add/use/show/list/remove/relink` manage registration and
+  activation. Remove never deletes workspace files. Relink requires the same UUID.
+  New workspaces copy global directory defaults; existing ones do not inherit
+  subsequent global default changes.
+- Discovery supports nested groups, stops at application roots and skips `.git`.
+  CLI targets match canonical relative paths, unique human names, then groups.
+  Ambiguous human names list canonical targets; there is no CLI fuzzy matching.
+- `config.EffectiveApp` resolves source/output inheritance. Validation, build,
+  fingerprints, package lookup, inspection and the TUI consume effective values.
+  Path settings never move files automatically. Preserve safe relative paths,
+  Windows reserved-name validation and symlink containment checks.
+- `new` generates a directory slug until manually overridden and never overwrites
+  an application directory. Rollback removes newly created empty directories only.
+- Cache state lives in `state/workspaces/<UUID>/build-cache.json` under Inpakker
+  home, keyed by application UUID. Build skips only matching inputs with existing
+  artifacts. Rebuild (`--force`) updates cache; `--no-cache` neither reads nor
+  writes cache. Failed builds do not update records.
+- Tools are global. Detection uses configured path, PATH, managed tools, cwd,
+  executable directory, then workspace root without recursive user-directory scans.
+  Explicit configured paths are not silently replaced. Downloads require upstream
+  license acceptance, official sources, cancellation, response/executable validation
+  and atomic installation. Test downloads with local HTTP servers.
+- `unpack` isolates decoder execution and securely extracts decoded ZIP output.
+  Source directory means packaging inputs, output directory means generated
+  packages, destination directory means extracted files. Install/uninstall commands
+  are metadata only and must never execute during packaging.
+- With no arguments, interactive invocation starts the TUI; redirected invocation
+  prints help. No-workspace startup offers workspace creation/addition. Workspace
+  management must work without configured external tools.
+- TUI `View()` renders only memory: no scans, hashing, processes, networking or
+  writes. Inventory is asynchronous and every result has workspace UUID and request
+  generation. Workspace changes discard old inventory and reject stale results.
+- Refresh, tool detection and update checks stay interactive; foreground packaging,
+  unpacking and installation block conflicting operations and support cancellation.
+- Input priority is window events, active operation, modal/form/input, page, global.
+  Backspace edits focused inputs before navigation. Read scalar form submissions
+  from Huh result keys, not pointers into copied Bubble Tea model values.
+- `w` opens Workspaces, `s` Settings, `i` About and contextual `o` opens folders.
+  About owns version/update information. Branding is decorative 📦 INPAKKER with
+  a plain accessible fallback. Use display-width-aware terminal alignment.
+- CLI `open` and TUI folder actions share an injectable path opener. Invoke Explorer
+  directly with one path argument and return without waiting for it to close.
+- Product operations have scriptable CLI equivalents; informational navigation
+  such as About does not require duplicate CLI commands. TUI excludes application
+  delete/rename and raw JSON editing, but supports constrained typed settings.
+- JSON output must not prompt, animate or emit ANSI. Application failures produce
+  concise detail lines and a count summary with nonzero status. Invocation/flag
+  failures show usage; operational errors do not.
+- Update checks share the user-local daily cache. Automatic failures are silent
+  and do not affect command success. `INPAKKER_NO_UPDATE_CHECK=1` disables automatic
+  checks. Explicit checks still work. Installation requires fresh metadata, a
+  trusted signature and SHA-256 verification. Development builds cannot update.
 
 ## Configuration contracts
 
-The canonical definitions are in `types/types.go`:
+Canonical types live in `types/types.go`: `UserConfig`, `ToolConfig`,
+`Preferences`, `WorkspaceDefaults`, `WorkspaceRegistration`, `WorkspaceConfig`,
+`AppConfig` and `EffectiveAppConfig`. User/workspace/app/cache files use
+`schemaVersion: 1`. Unsupported schemas fail clearly. Configuration writes are
+atomic. Tool paths/preferences never belong in portable workspace JSON.
 
-- Global: `intunewinapputil`, legacy `intuneWinAppUtilPath`, `decoderPath`,
-  `defaultOutputDir`, `appsDir`, and `muteIntuneWinAppUtil`.
-- App: `name`, `displayName`, `source`, `setupFile`, `installCommand`,
-  `uninstallCommand`, and optional `outputDir`.
+Global typed edits use known preference/default keys; workspace edits use name
+and directory keys. CLI `--workspace-settings` selects config scope without
+colliding with the global `--workspace <name-or-path>` selector. Update types,
+loaders, scaffolding, tests and docs together when contracts change.
 
-Keep JSON tags stable unless compatibility is deliberately being changed. If a
-field, default, or accepted key changes, update the types, loaders/scaffolding,
-tests, and README together. `installCommand` and `uninstallCommand` are reserved
-for future use and are not part of the packaging invocation today.
+Future Intune integration can attach to workspace identity. Do not add unused
+placeholder fields, Graph/Entra login or token storage. Credentials/tokens belong
+in protected user-local storage, never portable JSON.
 
 ## Implementation conventions
 
@@ -258,9 +265,7 @@ for future use and are not part of the packaging invocation today.
 - Keep user output concise and consistent with the existing info, warning,
   failure, and summary messages. Use the shared console in `cmd/output.go`.
   Lip Gloss styling must degrade cleanly for redirected/non-interactive output;
-  never emit unconditional ANSI sequences. Use `✓`, `!`, `X`, and `-` as the
-  standard success, warning, failure, and skipped/current markers; do not add
-  emoji status markers.
+  never emit unconditional ANSI sequences. Use `✓`, `!`, `X`, `-`, `•`, `○`, and `—` for status markers. The box emoji is decorative branding only.
 - Invocation and flag errors must include command usage. Operational errors
   must remain concise and must not dump usage. Interactive prompts require a
   terminal and must have flag-based, `--no-input` alternatives. JSON output

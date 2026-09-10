@@ -48,9 +48,19 @@ Pull requests should explain the outcome, identify compatibility changes, list
 the checks performed, and update user documentation alongside user-visible
 behavior. Linux and Windows CI must pass before merging.
 
+The active development line is `release/v0.4`. Its configuration/workspace
+redesign is intentional; do not retain v0.3 compatibility code. Tests must set
+`INPAKKER_HOME` to temporary storage and must not modify real user registrations,
+managed tools or installation directories. Windows CI also runs
+`powershell -File tests/installer.ps1`; these tests never modify real user PATH.
+
 ## Releases
 
 Maintainers merge a completed version branch into `master`, create an annotated
 Semantic Version tag on that merge, and push the tag. GitHub Actions verifies,
 builds, signs, attests, and publishes release artifacts. Do not commit generated
 executables, archives, checksums, signatures, or local workspaces.
+
+Before v1.0.0, intentional breaking CLI, configuration and workspace changes may
+ship in a MINOR release. After v1.0.0 they require a MAJOR increment. Keep the
+installer's embedded public certificate aligned with the updater's certificate.

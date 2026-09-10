@@ -14,11 +14,12 @@ import (
 )
 
 type App struct {
-	Ref      AppRef           `json:"ref"`
-	Config   *types.AppConfig `json:"config,omitempty"`
-	Status   string           `json:"status"`
-	Error    string           `json:"error,omitempty"`
-	Packages []string         `json:"packages,omitempty"`
+	Ref       AppRef                    `json:"ref"`
+	Config    *types.AppConfig          `json:"config,omitempty"`
+	Effective *types.EffectiveAppConfig `json:"effective,omitempty"`
+	Status    string                    `json:"status"`
+	Error     string                    `json:"error,omitempty"`
+	Packages  []string                  `json:"packages,omitempty"`
 }
 
 func (a App) Label() string {
@@ -30,7 +31,7 @@ func (a App) Label() string {
 
 func (w *Workspace) Inspect(ref AppRef) App {
 	app := App{Ref: ref, Status: "valid"}
-	cfg, err := config.LoadAppConfig(filepath.Join(ref.Path, "app.config.json"))
+	cfg, err := config.LoadAppConfig(filepath.Join(ref.Path, "inpakker.app.json"))
 	if err != nil {
 		app.Status, app.Error = "invalid", fmt.Sprintf("load config: %v", err)
 		return app
@@ -40,7 +41,9 @@ func (w *Workspace) Inspect(ref AppRef) App {
 		app.Status, app.Error = "invalid", err.Error()
 		return app
 	}
-	if err := ValidateInput(ref.Path, cfg); err != nil {
+	effective := w.Effective(*cfg)
+	app.Effective = &effective
+	if err := ValidateInput(ref.Path, &effective.AppConfig); err != nil {
 		app.Status, app.Error = "invalid", err.Error()
 	}
 	packages, packageErr := w.Packages(ref, cfg)
@@ -66,7 +69,10 @@ func ValidateInput(appPath string, cfg *types.AppConfig) error {
 	if err := config.ValidateApp(cfg); err != nil {
 		return err
 	}
-	sourcePath := filepath.Join(appPath, cfg.Source)
+	if err := pathutil.Within(appPath, filepath.Join(appPath, pathutil.Native(cfg.SourceDirectory))); err != nil {
+		return err
+	}
+	sourcePath := filepath.Join(appPath, pathutil.Native(cfg.SourceDirectory))
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return fmt.Errorf("access source directory: %w", err)
@@ -74,25 +80,37 @@ func ValidateInput(appPath string, cfg *types.AppConfig) error {
 	if !info.IsDir() {
 		return errors.New("source path is not a directory")
 	}
-	setupInfo, err := os.Stat(filepath.Join(sourcePath, cfg.SetupFile))
+	if err := pathutil.Within(sourcePath, filepath.Join(sourcePath, pathutil.Native(cfg.SetupFile))); err != nil {
+		return err
+	}
+	setupInfo, err := os.Stat(filepath.Join(sourcePath, pathutil.Native(cfg.SetupFile)))
 	if err != nil {
 		return fmt.Errorf("access setup file: %w", err)
 	}
 	if setupInfo.IsDir() {
 		return errors.New("setup file is a directory")
 	}
-	return nil
+	return filepath.WalkDir(sourcePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("source entry %q is a symbolic link; use regular source files", path)
+		}
+		return nil
+	})
 }
 
 func (w *Workspace) OutputDir(ref AppRef, cfg *types.AppConfig) (string, error) {
-	outputDir := cfg.OutputDir
-	if outputDir == "" {
-		outputDir = w.DefaultOutputDir()
+	effective := w.Effective(*cfg)
+	if !pathutil.ValidRelative(effective.OutputDirectory) {
+		return "", errors.New("output directory must remain within the application directory")
 	}
-	if !pathutil.IsSafeRelative(outputDir) {
-		return "", errors.New("output directory must remain within the app directory")
+	target := filepath.Join(ref.Path, pathutil.Native(effective.OutputDirectory))
+	if err := pathutil.Within(ref.Path, target); err != nil {
+		return "", err
 	}
-	return filepath.Join(ref.Path, outputDir), nil
+	return target, nil
 }
 
 func (w *Workspace) Packages(ref AppRef, cfg *types.AppConfig) ([]string, error) {

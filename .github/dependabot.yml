@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    target-branch: release/v0.3
+    target-branch: release/v0.4
     groups:
       go-dependencies:
         patterns:
@@ -15,7 +15,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    target-branch: release/v0.3
+    target-branch: release/v0.4
     groups:
       workflow-actions:
         patterns:

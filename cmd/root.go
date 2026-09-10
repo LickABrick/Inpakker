@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/LickABrick/inpakker/internal/config"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -20,8 +21,12 @@ var rootCmd = &cobra.Command{
 	Short:         "Package Win32 applications for Microsoft Intune",
 	SilenceErrors: true,
 	SilenceUsage:  true,
-	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		if _, err := config.EnsureUser(); err != nil {
+			return err
+		}
 		automaticUpdateCheck(cmd)
+		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, _ []string) {
 		printAutomaticUpdateNotice(cmd)

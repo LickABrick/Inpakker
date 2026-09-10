@@ -48,7 +48,7 @@ func newUnpackCmd(runner process.Runner) *cobra.Command {
 				if noInput || !interactive(cmd) {
 					return asUsage(errors.New("provide an application, group, or package path, or use --all"))
 				}
-				ws, err := workspace.Open(".")
+				ws, err := resolveWorkspace(cmd)
 				if err != nil {
 					return err
 				}
@@ -68,11 +68,25 @@ func newUnpackCmd(runner process.Runner) *cobra.Command {
 }
 
 func runUnpack(cmd *cobra.Command, runner process.Runner, args []string, all bool, destination string, force bool) error {
-	ws, err := workspace.Open(".")
+	var ws *workspace.Workspace
+	needsWorkspace := all
+	for _, arg := range args {
+		if !strings.EqualFold(filepath.Ext(arg), ".intunewin") {
+			needsWorkspace = true
+		}
+	}
+	if needsWorkspace {
+		var err error
+		ws, err = resolveWorkspace(cmd)
+		if err != nil {
+			return err
+		}
+	}
+	user, err := config.LoadUser()
 	if err != nil {
 		return err
 	}
-	service := unpacker.Service{DecoderPath: ws.Config.DecoderPath, Runner: runner}
+	service := unpacker.Service{DecoderPath: user.Tools.Decoder.Path, Runner: runner}
 	if err := service.Validate(); err != nil {
 		return err
 	}
@@ -108,7 +122,7 @@ func runUnpack(cmd *cobra.Command, runner process.Runner, args []string, all boo
 	failed := len(execution.failures)
 	console.summary("Unpack finished", execution.succeeded, failed, len(skipped))
 	if execution.succeeded == 1 && failed == 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "Output: %s\n", execution.onlyDestination)
+		fmt.Fprintf(cmd.OutOrStdout(), "Destination: %s\n", execution.onlyDestination)
 	}
 	if failed > 0 {
 		return reportedError{err: fmt.Errorf("%d %s failed", failed, plural(failed, "package", "packages"))}
@@ -122,7 +136,7 @@ func executeUnpack(ctx context.Context, service unpacker.Service, targets []unpa
 	completed := len(initialFailures)
 	for _, target := range targets {
 		if emit != nil {
-			emit(cliui.Event{Current: completed, Total: total, Label: target.label, Phase: "decoding"})
+			emit(cliui.Event{Current: completed + 1, Completed: completed, Total: total, Label: target.label, Phase: "decoding"})
 		}
 		result := service.Unpack(ctx, target.path, destination, force, nil, nil)
 		completed++
@@ -147,12 +161,15 @@ func resolveUnpackTargets(ws *workspace.Workspace, args []string, all bool) ([]u
 			names = append(names, arg)
 		}
 	}
+	if len(names) == 0 && !all {
+		return targets, failures, nil, nil
+	}
 	selection, err := ws.Discover(names, all)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	for _, ref := range selection.Apps {
-		cfg, loadErr := config.LoadAppConfig(filepath.Join(ref.Path, "app.config.json"))
+		cfg, loadErr := config.LoadAppConfig(filepath.Join(ref.Path, "inpakker.app.json"))
 		if loadErr != nil {
 			failures = append(failures, unpackFailure{label: filepath.Base(ref.Path), err: fmt.Errorf("load config: %w", loadErr)})
 			continue

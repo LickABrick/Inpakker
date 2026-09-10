@@ -17,7 +17,7 @@ func TestFingerprintTracksInputsAndExcludesOutput(t *testing.T) {
 	writeFile(t, filepath.Join(sourcePath, "setup.ps1"), "first")
 	writeFile(t, filepath.Join(outputPath, "old.intunewin"), "old output")
 	writeFile(t, utilityPath, "utility")
-	cfg := &types.AppConfig{Name: "app", DisplayName: "App", Source: "source", SetupFile: "setup.ps1", OutputDir: "source/output"}
+	cfg := &types.AppConfig{Name: "app", SourceDirectory: "source", SetupFile: "setup.ps1", OutputDirectory: "source/output"}
 
 	first, err := Fingerprint(appPath, cfg, outputPath, utilityPath)
 	if err != nil {

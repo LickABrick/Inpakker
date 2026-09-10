@@ -29,18 +29,6 @@ func (m Model) createCmd() tea.Cmd {
 	}
 }
 
-func (m Model) setupCmd() tea.Cmd {
-	options := *m.setup
-	return func() tea.Msg {
-		result, err := workspace.Initialize(options)
-		if err != nil {
-			return setupMsg{err: err}
-		}
-		apps, inspectErr := inspectApplications(result.Workspace)
-		return setupMsg{result: result, apps: apps, inventoryErr: inspectErr}
-	}
-}
-
 func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 	targets, err := m.targetApplications(all)
 	if err != nil {
@@ -57,7 +45,7 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 			if err := op.context.Err(); err != nil {
 				return validationDoneMsg{id: op.id, all: all, err: err}
 			}
-			emitActivity(op, activityEvent{current: index, total: len(targets), label: target.App.Label(), phase: "validating"})
+			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "validating"})
 			app := ws.Inspect(target.App.Ref)
 			if app.Status == "valid" {
 				valid++
@@ -65,7 +53,7 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 				issues = append(issues, validationIssue{AppID: app.Ref.Relative, Name: app.Label(), Issue: app.Error})
 			}
 		}
-		emitActivity(op, activityEvent{current: len(targets), total: len(targets), phase: "validation complete"})
+		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "validation complete"})
 		apps, inspectErr := inspectApplications(ws)
 		return validationDoneMsg{id: op.id, valid: valid, issues: issues, apps: apps, all: all, err: inspectErr}
 	})
@@ -96,10 +84,10 @@ func (m Model) startBuild(all bool, options packager.BuildOptions) (tea.Model, t
 		defer close(op.events)
 		var output bytes.Buffer
 		options.OnProgress = func(event packager.Event) {
-			emitActivity(op, activityEvent{current: event.Index - 1, total: event.Total, label: event.App, phase: event.Phase})
+			emitActivity(op, activityEvent{current: event.Index, completed: event.Index - 1, total: event.Total, label: event.App, phase: event.Phase})
 		}
 		results, buildErr := service.Build(op.context, refs, options, &output, &output)
-		emitActivity(op, activityEvent{current: len(results), total: len(targets), phase: "build complete"})
+		emitActivity(op, activityEvent{current: len(results), completed: len(results), total: len(targets), phase: "build complete"})
 		apps, inspectErr := inspectApplications(ws)
 		if buildErr == nil {
 			buildErr = inspectErr
@@ -114,7 +102,7 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 		m.showError("Unpacking unavailable", err)
 		return m, nil
 	}
-	service := unpacker.Service{DecoderPath: m.workspace.Config.DecoderPath, Runner: m.runner}
+	service := unpacker.Service{DecoderPath: m.workspace.User.Tools.Decoder.Path, Runner: m.runner}
 	if err := service.Validate(); err != nil {
 		m.showMessage("Unpacking unavailable", "The IntuneWinAppUtilDecoder is not configured or cannot be used for this workspace.\n\n"+err.Error()+"\n\nPress d from the application page to open Diagnostics.")
 		return m, nil
@@ -153,7 +141,7 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 				}
 				packagePath = target.App.Packages[0]
 			}
-			emitActivity(op, activityEvent{current: index, total: len(targets), label: target.App.Label(), phase: "decoding"})
+			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "decoding"})
 			result := service.Unpack(op.context, packagePath, "", false, io.Discard, io.Discard)
 			if result.Err != nil {
 				failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: result.Err.Error()})
@@ -161,7 +149,7 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 				outputs = append(outputs, result.Destination)
 			}
 		}
-		emitActivity(op, activityEvent{current: len(targets), total: len(targets), phase: "unpack complete"})
+		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "unpack complete"})
 		apps, inspectErr := inspectApplications(ws)
 		return unpackDoneMsg{id: op.id, succeeded: len(outputs), outputs: outputs, failures: failures, apps: apps, all: all, err: inspectErr}
 	})
@@ -184,7 +172,7 @@ func (m Model) startUpdate() (tea.Model, tea.Cmd) {
 			return updateDoneMsg{id: op.id}
 		}
 		err = service.Install(op.context, result, func(event updater.Event) {
-			emitActivity(op, activityEvent{current: event.Current, total: event.Total, phase: event.Phase})
+			emitActivity(op, activityEvent{current: event.Current, completed: event.Current, total: event.Total, phase: event.Phase})
 		})
 		return updateDoneMsg{id: op.id, version: result.LatestVersion, err: err}
 	})
@@ -192,6 +180,8 @@ func (m Model) startUpdate() (tea.Model, tea.Cmd) {
 
 func (m *Model) startOperation(kind operationKind, title string, total int) *operationState {
 	m.nextOperationID++
+	m.generation++
+	m.refreshing = false
 	ctx, cancel := context.WithCancel(m.ctx)
 	op := &operationState{
 		id: m.nextOperationID, kind: kind, title: title, context: ctx, cancel: cancel,
@@ -308,7 +298,7 @@ func (m Model) handleBuildDone(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 			row.Status, row.Detail = "X Failed", result.Err.Error()
 		case result.Status == packager.StatusCurrent:
 			current++
-			row.Status, row.Detail = "✓ Current", result.Reason
+			row.Status, row.Detail = "✓ Up to date", result.Reason
 		default:
 			built++
 			row.Status, row.Detail = "✓ Built", strings.Join(result.Artifacts, ", ")
@@ -319,7 +309,7 @@ func (m Model) handleBuildDone(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 		failed++
 		m.resultRows = append(m.resultRows, resultRow{Name: "Build operation", Status: "X Failed", Detail: msg.err.Error()})
 	}
-	m.resultTitle = fmt.Sprintf("%d built · %d current · %d failed", built, current, failed)
+	m.resultTitle = fmt.Sprintf("%d built · %d up to date · %d failed", built, current, failed)
 	m.resultCursor = 0
 	m.pushRoute(Route{Kind: RouteBuildResults})
 	return m, nil
@@ -344,7 +334,7 @@ func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
 		} else {
 			body := "✓ Package unpacked successfully."
 			if len(msg.outputs) > 0 {
-				body += "\n\nOutput\n" + msg.outputs[0]
+				body += "\n\nDestination\n" + msg.outputs[0]
 			}
 			m.showMessage("Unpack complete", body)
 		}
