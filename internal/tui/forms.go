@@ -31,24 +31,21 @@ func (m *Model) beginCreate() teaCmd {
 	}
 	m.create = &workspace.CreateOptions{}
 	m.directoryEdited = false
-	m.newGroup = ""
-	options := []huh.Option[string]{huh.NewOption("No group", "")}
-	for _, group := range m.groups {
-		options = append(options, huh.NewOption(group, group))
-	}
-	options = append(options, huh.NewOption("+ Create new group…", "__new__"))
 	m.directoryInput = huh.NewInput().Key("directory").Title("Directory name").Value(&m.create.DirectoryName).Validate(validApplicationName)
 	m.form = m.formWithTheme(huh.NewGroup(
 		huh.NewInput().Key("name").Title("Name").Value(&m.create.Name).Validate(huh.ValidateNotEmpty()),
 		m.directoryInput,
-		huh.NewSelect[string]().Title("Group").Options(options...).Value(&m.create.Group),
-		huh.NewInput().Key("newGroup").Title("New group (when selected)").Validate(validGroupName),
+		huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Suggestions(m.groups).Validate(validGroupName),
 		huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(requiredSafePath),
 		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", m.workspace.Config.SourceDirectory, m.workspace.Config.OutputDirectory)),
-		huh.NewNote().Title("Create application").Next(true).NextLabel("Create application"),
+		formSubmit("Create application"),
 	))
 	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	return m.form.Init()
+}
+
+func formSubmit(label string) *huh.Note {
+	return huh.NewNote().Next(true).NextLabel(label)
 }
 
 func (m *Model) beginBuildOptions() teaCmd {

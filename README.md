@@ -109,16 +109,24 @@ The shell shows **📦 INPAKKER**, the workspace name and its path. Press `w` fo
 Workspaces, `s` for Settings, `i` for About, and `?` for help. About contains the
 version, update checks and update installation.
 
+To download the packaging tool or decoder, open Settings (`s`), select an
+**External tools** row and press Enter → **Download from official source**.
+Accept the upstream license terms to begin. You can also choose an existing
+executable from the same menu.
+
 On Applications, `/` searches, `Enter` opens details, `n` creates an application,
 `b` builds, `B` opens build options, `v` validates and `u` unpacks. `Ctrl+B`,
 `Ctrl+V` and `Ctrl+U` operate on all applications. `o` opens the selected
 application's root folder in Explorer; on Workspaces it opens the highlighted
 workspace without switching. `r` refreshes in the background.
 
-Creation uses one form with inherited source/output settings and a group
-selector. Forms use arrows, Tab and Shift+Tab; Esc cancels. F2 browses paths in
-workspace/tool dialogs, with manual entry always available. Backspace edits a
-focused input before navigating back. Ctrl+C cancels an active operation.
+Creation uses one form with inherited source/output settings and an optional
+group path with suggestions for existing groups. Forms use arrows, Tab and
+Shift+Tab; Esc cancels. F2 browses paths in workspace/tool dialogs, with manual
+entry always available. Backspace edits a focused input before navigating back.
+Ctrl+C cancels an active operation.
+Build, validation and unpack results stay in scrollable dialogs, with colored
+status labels. Build tool output opens inside the dialog and returns to the result.
 
 Use `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` for plain branding and accessible
 CLI forms. Critical state always has a text/symbol label. See [TUI guide](docs/tui.md).

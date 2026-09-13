@@ -366,7 +366,7 @@ func TestBatchValidationOpensInspectableResults(t *testing.T) {
 		issues: []validationIssue{{AppID: app.App.Ref.Relative, Name: app.App.Label(), Issue: "setup file does not exist"}},
 	})
 	model = updated.(Model)
-	if model.currentRoute().Kind != RouteValidationResults || len(model.resultRows) != 1 || model.resultRows[0].AppID == "" {
+	if model.currentRoute().Kind != RouteApplications || model.modal != ModalResults || len(model.resultRows) != 1 || model.resultRows[0].AppID == "" {
 		t.Fatalf("validation results: route=%v rows=%#v", model.currentRoute().Kind, model.resultRows)
 	}
 }

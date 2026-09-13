@@ -230,7 +230,7 @@ func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "Validation was cancelled.")
+		m.showMessage("Cancelled", "! Validation was cancelled.")
 		return m, nil
 	}
 	if msg.err != nil {
@@ -253,17 +253,27 @@ func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) 
 		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID})
 	}
 	m.resultCursor = 0
-	m.pushRoute(Route{Kind: RouteValidationResults})
+	m.showResults("Validation results")
 	return m, nil
 }
 
 func (m Model) handleBuildDone(msg buildDoneMsg) (tea.Model, tea.Cmd) {
+	if m.operation == nil || m.operation.id != msg.id {
+		return m, nil
+	}
+	updated, cmd := m.buildResult(msg)
+	m = updated.(Model)
+	m.modalHasLog = strings.TrimSpace(m.logText) != ""
+	return m, cmd
+}
+
+func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
 	m.setLog("Packaging tool output", msg.log)
 	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "Build was cancelled.")
+		m.showMessage("Cancelled", "! Build was cancelled.")
 		return m, nil
 	}
 	if len(msg.apps) > 0 {
@@ -311,7 +321,7 @@ func (m Model) handleBuildDone(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.resultTitle = fmt.Sprintf("%d built · %d up to date · %d failed", built, current, failed)
 	m.resultCursor = 0
-	m.pushRoute(Route{Kind: RouteBuildResults})
+	m.showResults("Build results")
 	return m, nil
 }
 
@@ -320,7 +330,7 @@ func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "Unpacking was cancelled.")
+		m.showMessage("Cancelled", "! Unpacking was cancelled.")
 		return m, nil
 	}
 	if msg.err != nil {
@@ -349,7 +359,7 @@ func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.resultTitle = fmt.Sprintf("%d succeeded · %d failed", msg.succeeded, len(msg.failures))
 	m.resultCursor = 0
-	m.pushRoute(Route{Kind: RouteUnpackResults})
+	m.showResults("Unpack results")
 	return m, nil
 }
 
@@ -358,7 +368,7 @@ func (m Model) handleUpdateDone(msg updateDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "The update was cancelled.")
+		m.showMessage("Cancelled", "! The update was cancelled.")
 	} else if msg.err != nil {
 		m.showError("Update failed", msg.err)
 	} else if msg.version == "" {

@@ -40,8 +40,9 @@ Details show effective source/output values and whether they are inherited.
 
 `n` opens one Create application form: name, generated directory name, group,
 setup file and inherited defaults. Editing the directory name stops automatic
-slug updates. Choose an existing group or “Create new group” and enter its
-relative path, including nested groups. The final Create application action
+slug updates. The optional Group field accepts an existing or new relative path,
+including nested groups; Ctrl+E completes a suggested existing group. Leave it
+empty for no group. The final Create application action
 submits; Esc cancels without writing.
 
 ## Forms and settings
@@ -53,9 +54,14 @@ forms offer F2 browsing with right-arrow directory navigation and Enter selectio
 manual paths remain available.
 
 Settings uses a property list with focused edits. Directory changes explain that
-files will not be moved. `d` detects tools. With a tool selected, Enter chooses an
-existing executable, `I` downloads after license acceptance, `a` accepts a detected
-candidate, and `x` clears its configured path while preserving the executable.
+files will not be moved. To download tools, press `s`, select an **External tools**
+row and press Enter. Choose **Download from official source**, then accept the
+upstream license terms to start downloading. The same menu offers **Choose
+existing executable** for a tool already on disk. No workspace is required.
+
+`d` detects tools. With a tool selected, `I` opens the download confirmation
+directly, `a` accepts a detected candidate, and `x` clears its configured path
+while preserving the executable.
 The decoder is optional and required only for unpacking.
 
 ## Background work and progress
@@ -67,7 +73,17 @@ replace current data. Foreground builds, unpacking and installations block
 conflicting actions and support Ctrl+C cancellation.
 
 Progress shows the current item (for example “4 of 4”), phase and completed count.
-Completion removes progress and displays results without an artificial delay.
+Completion replaces progress with results inside a dialog, keeping the current
+page behind it. This applies to single and batch builds, validation and unpacking,
+as well as update and tool installation results. Success, failure, warning and
+active status text use distinct colors alongside their text/symbol labels.
+
+In batch results, Up/down selects an application and PgUp/PgDn scrolls the full
+details. Enter opens the selected application's page when available; Esc closes
+the dialog and returns to the original page. In other result dialogs, arrows and
+PgUp/PgDn scroll long messages. `l` opens available build tool output in the dialog;
+Enter or Esc returns to the result. Saving/scaffolding dialogs remain open until
+their writes finish.
 
 ## Folder context
 

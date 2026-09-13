@@ -164,7 +164,7 @@ func (m *Model) beginWorkspaceCreate() tea.Cmd {
 		huh.NewInput().Title("Applications directory").Value(&m.workspaceDraft.ApplicationsDirectory).Validate(safeWorkspacePath),
 		huh.NewInput().Title("Source directory").Value(&m.workspaceDraft.SourceDirectory).Validate(safeWorkspacePath),
 		huh.NewInput().Title("Output directory").Value(&m.workspaceDraft.OutputDirectory).Validate(safeWorkspacePath),
-		huh.NewNote().Title("Create workspace").Next(true).NextLabel("Create workspace"),
+		formSubmit("Create workspace"),
 	))
 	return m.form.Init()
 }
@@ -176,7 +176,7 @@ func (m *Model) beginWorkspacePath(action, target string) tea.Cmd {
 	}
 	m.modal, m.modalTitle = ModalWorkspaceForm, title
 	m.pathInput = huh.NewInput().Key("path").Title("Workspace directory · F2 browse").Description("Directory containing inpakker.workspace.json").Validate(huh.ValidateNotEmpty())
-	m.form = m.formWithTheme(huh.NewGroup(m.pathInput, huh.NewNote().Title(title).Next(true).NextLabel(title)))
+	m.form = m.formWithTheme(huh.NewGroup(m.pathInput, formSubmit(title)))
 	return m.form.Init()
 }
 func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -240,6 +240,11 @@ func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		})
 	case ModalTool:
 		id, action, path, accepted := m.toolID, m.toolAction, m.form.GetString("path"), m.form.GetBool("accepted")
+		if action == "actions" {
+			nextAction := m.form.GetString("toolAction")
+			m.closeModal()
+			return m, tea.Sequence(formCmd, m.beginToolForm(nextAction))
+		}
 		m.closeModal()
 		if action == "install" && !accepted {
 			return m, nil
@@ -331,7 +336,7 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		row := rows[m.settingCursor]
 		if row.scope == "tool" {
 			m.toolID = row.key
-			return m, m.beginToolForm("choose")
+			return m, m.beginToolForm("actions")
 		}
 		m.editScope, m.editKey, m.editValue = row.scope, row.key, row.value
 		return m, m.beginSettingForm()
@@ -374,7 +379,7 @@ func (m *Model) beginSettingForm() tea.Cmd {
 		description = "Applications using this workspace default will use the new directory. Existing files will not be moved automatically."
 	}
 	m.modal, m.modalTitle = ModalSetting, "Edit setting"
-	m.form = m.formWithTheme(huh.NewGroup(huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value).Validate(huh.ValidateNotEmpty()), huh.NewNote().Title("Save setting").Next(true).NextLabel("Save setting")))
+	m.form = m.formWithTheme(huh.NewGroup(huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value).Validate(huh.ValidateNotEmpty()), formSubmit("Save setting")))
 	return m.form.Init()
 }
 func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
@@ -404,11 +409,22 @@ func (m *Model) beginToolForm(action string) tea.Cmd {
 	m.toolAction, m.accepted, m.formPath = action, false, ""
 	definition, _ := toolmanager.DefinitionFor(m.toolID)
 	m.modal, m.modalTitle = ModalTool, definition.Name
-	if action == "install" {
-		m.form = m.formWithTheme(huh.NewGroup(huh.NewNote().Description("Provided by "+definition.Repository+" under separate upstream terms.\nSource/license: "+definition.LicenseURL), huh.NewConfirm().Key("accepted").Title("Accept and download?").Affirmative("Accept and download").Negative("Configure later")))
+	if action == "actions" {
+		m.form = m.formWithTheme(huh.NewGroup(
+			huh.NewSelect[string]().Key("toolAction").Title("Set up tool").Options(
+				huh.NewOption("Download from official source", "install"),
+				huh.NewOption("Choose existing executable", "choose"),
+			),
+		))
+	} else if action == "install" {
+		m.form = m.formWithTheme(huh.NewGroup(
+			huh.NewNote().Description("Provided by "+definition.Repository+" under separate upstream terms.\nSource/license: "+definition.LicenseURL),
+			huh.NewConfirm().Key("accepted").Title("Download this tool?").
+				Affirmative("Accept and download").Negative("Configure later"),
+		))
 	} else {
 		m.pathInput = huh.NewInput().Key("path").Title("Executable path · F2 browse").Validate(huh.ValidateNotEmpty())
-		m.form = m.formWithTheme(huh.NewGroup(m.pathInput, huh.NewNote().Title("Choose existing executable").Next(true).NextLabel("Save path")))
+		m.form = m.formWithTheme(huh.NewGroup(m.pathInput, formSubmit("Save path")))
 	}
 	return m.form.Init()
 }
@@ -447,6 +463,9 @@ func (m Model) handleTools(msg toolsMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.statuses != nil {
 		m.toolStatuses = msg.statuses
+	}
+	if msg.operationID != 0 {
+		m.showMessage("Tool installed", "✓ The external tool was installed and is ready to use.")
 	}
 	if m.workspace != nil {
 		copy := *m.workspace

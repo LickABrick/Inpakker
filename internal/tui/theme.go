@@ -13,6 +13,7 @@ import (
 type Theme struct {
 	BrandColor          color.Color
 	AccentColor         color.Color
+	ButtonTextColor     color.Color
 	TextColor           color.Color
 	MutedColor          color.Color
 	SurfaceColor        color.Color
@@ -44,6 +45,7 @@ type Theme struct {
 	StatusWarning       lipgloss.Style
 	StatusError         lipgloss.Style
 	StatusMuted         lipgloss.Style
+	StatusActive        lipgloss.Style
 	HorizontalSeparator lipgloss.Style
 }
 
@@ -51,6 +53,7 @@ func NewTheme(isDark bool) Theme {
 	choose := lipgloss.LightDark(isDark)
 	brand := choose(lipgloss.Color("#9A5B13"), lipgloss.Color("#E3A44A"))
 	accent := choose(lipgloss.Color("#087F8C"), lipgloss.Color("#4FC3C8"))
+	buttonText := choose(lipgloss.Color("#FFFFFF"), lipgloss.Color("#101828"))
 	text := choose(lipgloss.Color("#172033"), lipgloss.Color("#E8EDF4"))
 	muted := choose(lipgloss.Color("#667085"), lipgloss.Color("#8D99AA"))
 	surface := choose(lipgloss.Color("#E8EDF3"), lipgloss.Color("#172033"))
@@ -61,7 +64,7 @@ func NewTheme(isDark bool) Theme {
 	danger := choose(lipgloss.Color("#B42318"), lipgloss.Color("#FF7B72"))
 	disabled := choose(lipgloss.Color("#98A2B3"), lipgloss.Color("#697586"))
 	return Theme{
-		BrandColor: brand, AccentColor: accent, TextColor: text, MutedColor: muted,
+		BrandColor: brand, AccentColor: accent, ButtonTextColor: buttonText, TextColor: text, MutedColor: muted,
 		SurfaceColor: surface, SelectedColor: selected, BorderColor: border,
 		FocusedBorderColor: brand, SuccessColor: success, WarningColor: warning,
 		DangerColor: danger, DisabledColor: disabled,
@@ -86,6 +89,7 @@ func NewTheme(isDark bool) Theme {
 		StatusWarning:       lipgloss.NewStyle().Foreground(warning),
 		StatusError:         lipgloss.NewStyle().Foreground(danger),
 		StatusMuted:         lipgloss.NewStyle().Foreground(disabled),
+		StatusActive:        lipgloss.NewStyle().Foreground(accent),
 		HorizontalSeparator: lipgloss.NewStyle().Foreground(border),
 	}
 }
@@ -106,6 +110,7 @@ func (t Theme) HuhTheme() huh.Theme {
 	return huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeBase(isDark)
 		styles.Focused.Base = styles.Focused.Base.BorderForeground(t.FocusedBorderColor)
+		styles.Focused.Card = styles.Focused.Base
 		styles.Focused.Title = styles.Focused.Title.Foreground(t.BrandColor).Bold(true)
 		styles.Focused.NoteTitle = styles.Focused.NoteTitle.Foreground(t.BrandColor).Bold(true)
 		styles.Focused.Description = styles.Focused.Description.Foreground(t.MutedColor)
@@ -114,14 +119,17 @@ func (t Theme) HuhTheme() huh.Theme {
 		styles.Focused.SelectSelector = styles.Focused.SelectSelector.Foreground(t.BrandColor).SetString("› ")
 		styles.Focused.SelectedOption = styles.Focused.SelectedOption.Foreground(t.AccentColor).Bold(true)
 		styles.Focused.Option = styles.Focused.Option.Foreground(t.TextColor)
-		styles.Focused.FocusedButton = styles.Focused.FocusedButton.Background(t.BrandColor).Foreground(lipgloss.Color("#101828")).Bold(true)
+		styles.Focused.FocusedButton = styles.Focused.FocusedButton.Background(t.BrandColor).Foreground(t.ButtonTextColor).Bold(true)
 		styles.Focused.BlurredButton = styles.Focused.BlurredButton.Background(t.SelectedColor).Foreground(t.TextColor)
+		styles.Focused.Next = styles.Focused.FocusedButton
 		styles.Focused.TextInput.Cursor = styles.Focused.TextInput.Cursor.Foreground(t.BrandColor)
 		styles.Focused.TextInput.Prompt = styles.Focused.TextInput.Prompt.Foreground(t.BrandColor)
 		styles.Focused.TextInput.Text = styles.Focused.TextInput.Text.Foreground(t.TextColor)
 		styles.Focused.TextInput.Placeholder = styles.Focused.TextInput.Placeholder.Foreground(t.DisabledColor)
 		styles.Blurred = styles.Focused
 		styles.Blurred.Base = styles.Blurred.Base.BorderStyle(lipgloss.HiddenBorder())
+		styles.Blurred.Card = styles.Blurred.Base
+		styles.Blurred.Next = styles.Blurred.BlurredButton
 		styles.Blurred.Title = styles.Blurred.Title.Foreground(t.MutedColor)
 		styles.Group.Title = lipgloss.NewStyle().Foreground(t.BrandColor).Bold(true)
 		styles.Group.Description = lipgloss.NewStyle().Foreground(t.MutedColor)

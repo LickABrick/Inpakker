@@ -47,6 +47,8 @@ const (
 	ModalProgress
 	ModalSetting
 	ModalTool
+	ModalResults
+	ModalLogs
 )
 
 type operationKind int
@@ -204,6 +206,8 @@ type Model struct {
 	modalTitle      string
 	modalBody       string
 	modalErr        error
+	modalHasLog     bool
+	logReturnModal  ModalKind
 	form            *huh.Form
 	create          *workspace.CreateOptions
 	workspaceDraft  *workspace.CreateWorkspaceOptions
@@ -212,7 +216,6 @@ type Model struct {
 	pathInput       *huh.Input
 	directoryInput  *huh.Input
 	directoryEdited bool
-	newGroup        string
 
 	updateConfirmed bool
 	buildMode       string
@@ -234,6 +237,7 @@ type Model struct {
 	detailViewport   viewport.Model
 	helpViewport     viewport.Model
 	logViewport      viewport.Model
+	modalViewport    viewport.Model
 }
 
 func New(ctx context.Context, root string, ws *workspace.Workspace, runner process.Runner, updateService *updater.Service, version string) (Model, error) {
@@ -268,6 +272,7 @@ func New(ctx context.Context, root string, ws *workspace.Workspace, runner proce
 		theme: theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
 		routes: []Route{{Kind: RouteApplications}}, spinner: activitySpinner, progress: bar,
 		detailViewport: detailView, helpViewport: helpView, logViewport: logView,
+		modalViewport: viewport.New(viewport.WithWidth(54), viewport.WithHeight(12)),
 	}
 
 	return m, nil
@@ -374,7 +379,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.operation != nil {
 		if isKey && key.Matches(keyPress, m.keys.Cancel) {
 			m.cancelOperation()
-			m.showMessage("Cancelled", "The operation was cancelled. No other Inpakker actions were closed.")
+			m.showMessage("Cancelled", "! The operation was cancelled.")
 		}
 		return m, nil
 	}
@@ -397,23 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.currentRoute().Kind == RouteApplication && key.Matches(keyPress, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
 		return m.updatePage(msg)
 	}
-	if (m.currentRoute().Kind == RouteValidationResults || m.currentRoute().Kind == RouteBuildResults || m.currentRoute().Kind == RouteUnpackResults) &&
-		(key.Matches(keyPress, m.keys.Up) || key.Matches(keyPress, m.keys.Down)) {
-		if key.Matches(keyPress, m.keys.Up) && m.resultCursor > 0 {
-			m.resultCursor--
-		}
-		if key.Matches(keyPress, m.keys.Down) && m.resultCursor < len(m.resultRows)-1 {
-			m.resultCursor++
-		}
-		return m, nil
-	}
-	if m.currentRoute().Kind == RouteLogs {
-		if key.Matches(keyPress, m.keys.Back, m.keys.Escape) {
-			m.popRoute()
-			return m, nil
-		}
-		return m.updatePage(msg)
-	}
+
 	if m.currentRoute().Kind == RouteWorkspaces {
 		return m.updateWorkspaces(keyPress)
 	}
@@ -433,10 +422,6 @@ func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailViewport.SetContent(m.applicationView(max(20, m.width-8)))
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
-		return m, cmd
-	case RouteLogs:
-		var cmd tea.Cmd
-		m.logViewport, cmd = m.logViewport.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -571,13 +556,6 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if key.Matches(pressed, m.keys.Refresh) {
 			m.openDiagnostics()
 		}
-	case RouteValidationResults, RouteBuildResults, RouteUnpackResults:
-		if key.Matches(pressed, m.keys.Open) && m.resultCursor >= 0 && m.resultCursor < len(m.resultRows) && m.resultRows[m.resultCursor].AppID != "" {
-			m.pushRoute(Route{Kind: RouteApplication, AppID: m.resultRows[m.resultCursor].AppID})
-		}
-		if key.Matches(pressed, m.keys.Logs) && strings.TrimSpace(m.logText) != "" {
-			m.pushRoute(Route{Kind: RouteLogs})
-		}
 	}
 	return m, nil
 }
@@ -585,6 +563,10 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.picking {
 		return m.updatePicker(msg)
+	}
+	// Saving/scaffolding is asynchronous too; keep its dialog until completion.
+	if m.modal == ModalProgress {
+		return m, nil
 	}
 	if pressed, ok := msg.(tea.KeyPressMsg); ok && pressed.Code == tea.KeyF2 && m.pathInput != nil && m.form != nil {
 		return m, m.beginPicker()
@@ -616,6 +598,39 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if pressed, ok := msg.(tea.KeyPressMsg); ok {
+		if m.modal == ModalLogs {
+			if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open) {
+				m.modal = m.logReturnModal
+				return m, nil
+			}
+			m.prepareLogViewport()
+			var cmd tea.Cmd
+			m.logViewport, cmd = m.logViewport.Update(msg)
+			return m, cmd
+		}
+		if m.modal == ModalResults && key.Matches(pressed, m.keys.Up, m.keys.Down) {
+			if key.Matches(pressed, m.keys.Up) {
+				m.resultCursor = max(0, m.resultCursor-1)
+			} else {
+				m.resultCursor = min(max(0, len(m.resultRows)-1), m.resultCursor+1)
+			}
+			m.prepareModalViewport()
+			m.modalViewport.SetYOffset(m.resultOffset())
+			return m, nil
+		}
+		if m.modal == ModalResults && key.Matches(pressed, m.keys.Open) && len(m.resultRows) > 0 {
+			if appID := m.resultRows[m.resultCursor].AppID; appID != "" {
+				m.closeModal()
+				m.pushRoute(Route{Kind: RouteApplication, AppID: appID})
+				return m, nil
+			}
+		}
+		if (m.modal == ModalMessage || m.modal == ModalResults) && key.Matches(pressed, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
+			m.prepareModalViewport()
+			var cmd tea.Cmd
+			m.modalViewport, cmd = m.modalViewport.Update(msg)
+			return m, cmd
+		}
 		if m.modal == ModalHelp && key.Matches(pressed, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
 			m.helpViewport.SetContent(m.helpContent())
 			var cmd tea.Cmd
@@ -627,9 +642,10 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openDiagnostics()
 			return m, nil
 		}
-		if m.modal == ModalMessage && key.Matches(pressed, m.keys.Logs) && strings.TrimSpace(m.logText) != "" {
-			m.closeModal()
-			m.pushRoute(Route{Kind: RouteLogs})
+		if m.modalHasLog && key.Matches(pressed, m.keys.Logs) {
+			m.logReturnModal, m.modal = m.modal, ModalLogs
+			m.prepareLogViewport()
+			m.logViewport.GotoTop()
 			return m, nil
 		}
 		if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open, m.keys.Help) {
@@ -642,9 +658,7 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	switch m.modal {
 	case ModalNewApplication:
-		if m.create.Group == "__new__" {
-			m.create.Group = m.form.GetString("newGroup")
-		}
+		m.create.Group = m.form.GetString("group")
 
 		m.modal, m.form = ModalProgress, nil
 		m.modalTitle, m.modalBody = "Creating application", "Preparing application workspace…"
@@ -691,6 +705,11 @@ func (m *Model) resize(width, height int) {
 	if m.form != nil {
 		m.form.WithWidth(modalInnerWidth(width)).WithHeight(formContentHeight(height))
 	}
+	if m.modal == ModalMessage || m.modal == ModalResults {
+		m.prepareModalViewport()
+	} else if m.modal == ModalLogs {
+		m.prepareLogViewport()
+	}
 }
 
 func (m *Model) applyTheme(theme Theme) {
@@ -705,6 +724,7 @@ func (m *Model) applyTheme(theme Theme) {
 }
 
 func (m *Model) closeModal() {
+	m.modalHasLog = false
 	m.pathInput = nil
 	m.picking = false
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalNone, "", "", nil, nil
@@ -712,10 +732,20 @@ func (m *Model) closeModal() {
 
 func (m *Model) showMessage(title, body string) {
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, body, nil, nil
+	m.modalHasLog = false
+	m.modalViewport.GotoTop()
 }
 
 func (m *Model) showError(title string, err error) {
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, "", err, nil
+	m.modalHasLog = false
+	m.modalViewport.GotoTop()
+}
+
+func (m *Model) showResults(title string) {
+	m.showMessage(title, "")
+	m.modal = ModalResults
+	m.resultCursor = 0
 }
 
 func (m Model) selectedApplication() (ApplicationView, bool) {

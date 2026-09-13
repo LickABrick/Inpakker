@@ -215,6 +215,8 @@ the v0.3 formats; no compatibility aliases or automatic migrations are retained.
   generation. Workspace changes discard old inventory and reject stale results.
 - Refresh, tool detection and update checks stay interactive; foreground packaging,
   unpacking and installation block conflicting operations and support cancellation.
+  Operation results and build tool output remain in scrollable dialogs over the
+  originating page; only explicit application navigation opens a result's app page.
 - Input priority is window events, active operation, modal/form/input, page, global.
   Backspace edits focused inputs before navigation. Read scalar form submissions
   from Huh result keys, not pointers into copied Bubble Tea model values.
