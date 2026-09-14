@@ -84,7 +84,7 @@ func TestCreateGroupUsesOneFieldAndSubmitsItsValue(t *testing.T) {
 				m = updated.(Model)
 				queue = append(queue, cmd)
 			}
-			if m.form != nil || m.modal != ModalProgress || m.create.Group != group {
+			if m.form != nil || m.modal != ModalCreateReview || m.create.Group != group {
 				t.Fatalf("form did not submit group: modal=%v group=%q, want %q", m.modal, m.create.Group, group)
 			}
 		})

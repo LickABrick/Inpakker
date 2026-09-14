@@ -49,6 +49,8 @@ const (
 	ModalTool
 	ModalResults
 	ModalLogs
+	ModalActions
+	ModalCreateReview
 )
 
 type operationKind int
@@ -228,6 +230,9 @@ type Model struct {
 	pathInput       *huh.Input
 	directoryInput  *huh.Input
 	directoryEdited bool
+	actions         []menuAction
+	actionCursor    int
+	actionReturn    ModalKind
 
 	updateConfirmed bool
 	buildMode       string
@@ -351,7 +356,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case createMsg:
 		if msg.err != nil {
-			m.showError("Could not create application", msg.err)
+			m.showCreateReview()
+			m.modalErr = msg.err
 			return m, nil
 		}
 		m.routes = []Route{{Kind: RouteApplications}}
@@ -478,6 +484,10 @@ func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(pressed, m.keys.Actions) && m.workspace != nil && (m.currentRoute().Kind == RouteApplications || m.currentRoute().Kind == RouteApplication) {
+		m.beginActions()
+		return m, nil
+	}
 	if key.Matches(pressed, m.keys.LastResult) {
 		m.reopenResult()
 		return m, nil
@@ -584,6 +594,12 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.modal == ModalActions {
+		return m.updateActions(msg)
+	}
+	if m.modal == ModalCreateReview {
+		return m.updateCreateReview(msg)
+	}
 	if m.picking {
 		return m.updatePicker(msg)
 	}
@@ -596,12 +612,16 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.form != nil {
-		beforeName, beforeDirectory := "", ""
+		beforeName, beforeDirectory, beforeSetup := "", "", ""
 		if m.create != nil && m.modal == ModalNewApplication {
 			beforeName, beforeDirectory = m.create.Name, m.create.DirectoryName
+			beforeSetup = m.create.SetupFile
 		}
 		updated, cmd := m.form.Update(msg)
 		if m.create != nil && m.modal == ModalNewApplication {
+			if m.create.SetupFile != beforeSetup {
+				m.create.SetupFrom = ""
+			}
 			if m.create.DirectoryName != beforeDirectory {
 				m.directoryEdited = true
 			}
@@ -621,6 +641,10 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if pressed, ok := msg.(tea.KeyPressMsg); ok {
+		if m.displayedResult != nil && (m.modal == ModalMessage || m.modal == ModalResults) && key.Matches(pressed, m.keys.Actions) {
+			m.beginActions()
+			return m, nil
+		}
 		if m.displayedResult != nil && (m.modal == ModalMessage || m.modal == ModalResults) {
 			if pressed.Text == "r" && len(m.displayedResult.retryIDs) > 0 {
 				return m.retryFailed()
@@ -690,10 +714,11 @@ func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	switch m.modal {
 	case ModalNewApplication:
 		m.create.Group = m.form.GetString("group")
-
-		m.modal, m.form = ModalProgress, nil
-		m.modalTitle, m.modalBody = "Creating application", "Preparing application workspace…"
-		return m, tea.Sequence(formCmd, m.createCmd())
+		m.create.Name = m.form.GetString("name")
+		m.create.DirectoryName = m.form.GetString("directory")
+		m.create.SetupFile = m.form.GetString("setup")
+		m.showCreateReview()
+		return m, formCmd
 	case ModalWorkspaceForm, ModalSetting, ModalTool:
 		return m.completeManagerForm(formCmd)
 
@@ -790,6 +815,7 @@ func (m Model) selectedApplication() (ApplicationView, bool) {
 				return app, true
 			}
 		}
+		return ApplicationView{}, false
 	}
 	return m.apps.selected()
 }

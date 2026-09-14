@@ -274,8 +274,8 @@ func TestInvalidBuildAndUnavailableUnpackExplainWhy(t *testing.T) {
 	model.apps.filtered[0] = model.apps.all[0]
 	updated, _ = model.Update(press("u"))
 	model = updated.(Model)
-	if model.modal != ModalMessage || !strings.Contains(model.modalBody, "not configured") {
-		t.Fatalf("unpack unavailable message = %q", model.modalBody)
+	if model.modal != ModalTool || model.toolID != "decoder" || model.toolAction != "actions" {
+		t.Fatalf("unpack did not offer decoder setup: modal=%v tool=%q", model.modal, model.toolID)
 	}
 }
 

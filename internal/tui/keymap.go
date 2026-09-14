@@ -9,10 +9,12 @@ type KeyMap struct {
 	Up, Down, PageUp, PageDown, Open, Back, Escape, Search, NewApp, Build, BuildAll, BuildOptions key.Binding
 	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Refresh                                key.Binding
 	Help, Quit, Cancel, Logs, LastResult                                                          key.Binding
+	Actions                                                                                       key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
+		Actions:      binding([]string{"a"}, "a", "actions"),
 		Workspaces:   binding([]string{"w"}, "w", "workspaces"),
 		Settings:     binding([]string{"s"}, "s", "settings"),
 		About:        binding([]string{"i"}, "i", "about"),

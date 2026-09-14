@@ -439,6 +439,7 @@ func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
 	return m, m.registryCmd()
 }
 func (m *Model) beginToolForm(action string) tea.Cmd {
+	m.pathInput = nil
 	m.toolAction, m.accepted, m.formPath = action, false, ""
 	definition, _ := toolmanager.DefinitionFor(m.toolID)
 	m.modal, m.modalTitle = ModalTool, definition.Name
@@ -460,6 +461,14 @@ func (m *Model) beginToolForm(action string) tea.Cmd {
 		m.form = m.formWithTheme(huh.NewGroup(m.pathInput, formSubmit("Save path")))
 	}
 	return m.form.Init()
+}
+
+func (m *Model) beginToolRecovery(id string) tea.Cmd {
+	m.closeModal()
+	m.toolID = id
+	cmd := m.beginToolForm("actions")
+	m.form.GetFocusedField().(*huh.Select[string]).Description("Tool missing or unavailable. Set it up here, then retry.")
+	return cmd
 }
 func (m Model) detectToolsCmd() tea.Cmd {
 	root := ""

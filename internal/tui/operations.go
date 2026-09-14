@@ -85,6 +85,9 @@ func (m Model) buildTargets(targets []ApplicationView, all bool, options package
 	}
 	service := packager.Service{Workspace: m.workspace, Runner: m.runner}
 	if err := service.Validate(); err != nil {
+		if m.workspace != nil && m.runner != nil {
+			return m, m.beginToolRecovery("content-prep")
+		}
 		m.showError("Build unavailable", err)
 		return m, nil
 	}
@@ -128,7 +131,10 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 func (m Model) unpackTargets(targets []ApplicationView, all bool, selectedPackage string) (tea.Model, tea.Cmd) {
 	service := unpacker.Service{DecoderPath: m.workspace.User.Tools.Decoder.Path, Runner: m.runner}
 	if err := service.Validate(); err != nil {
-		m.showMessage("Unpacking unavailable", "The IntuneWinAppUtilDecoder is not configured or cannot be used for this workspace.\n\n"+err.Error()+"\n\nPress d from the application page to open Diagnostics.")
+		if m.runner != nil {
+			return m, m.beginToolRecovery("decoder")
+		}
+		m.showError("Unpacking unavailable", err)
 		return m, nil
 	}
 	if !all && selectedPackage == "" {

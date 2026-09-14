@@ -36,21 +36,41 @@ on narrow screens. Build labels are ✓ Up to date, • Needs build, ○ Not bui
 
 `/` searches; Enter opens details. `b` builds; `B` offers Build, Rebuild and Build
 without cache. `v` validates; `u` unpacks. Ctrl+B/Ctrl+V/Ctrl+U act on all apps.
+Press `a` on Applications or details to open a visible action menu for the selected
+application: Build, Build options / rebuild, Validate, Unpack, Open application
+folder and Diagnostics. Arrows select, Enter runs the action, and Esc returns.
 Details show effective source/output values and whether they are inherited.
 
 `n` opens one Create application form: name, generated directory name, group,
 setup file and inherited defaults. Editing the directory name stops automatic
 slug updates. The optional Group field accepts an existing or new relative path,
 including nested groups; Ctrl+E completes a suggested existing group. Leave it
-empty for no group. The final Create application action
-submits; Esc cancels without writing.
+empty for no group. In the Setup file field, type a relative filename to add
+later, or press F2 to select an existing installer (including MSI, EXE and scripts).
+The selected file will be copied into the new source folder; companion files
+are not copied automatically. Editing the setup filename clears the copy selection.
+
+**Review application** shows the resolved application, source, setup and output
+paths before writing anything. Arrows and PgUp/PgDn scroll the preview. Enter
+creates the application; Esc returns to editing with the draft intact. Ctrl+C
+cancels the review. A failed creation preserves the draft for correction or retry.
+The CLI equivalent is:
+
+```powershell
+inpakker new "Mozilla Firefox" --group Browsers --setup-from "C:\Downloads\Firefox Setup.exe" --no-input
+```
+
+`--setup-from` defaults the setup filename to the selected file's name. Combine
+it with `--setup-file` to choose a different safe relative destination within the
+source folder. Existing application directories are never overwritten.
 
 ## Forms and settings
 
 Up/down and Tab/Shift+Tab navigate text fields; left/right move the cursor and
 Backspace deletes. Select controls use arrows to choose an option and Enter to
 advance. Global shortcuts do not trigger while typing. Workspace/tool path
-forms offer F2 browsing with right-arrow directory navigation and Enter selection;
+forms and application setup selection offer F2 browsing with right-arrow directory
+navigation and Enter selection;
 manual paths remain available.
 
 Settings uses a property list with focused edits. Directory changes explain that
@@ -64,7 +84,10 @@ existing executable** for a tool already on disk. No workspace is required.
 `d` detects tools. With a tool selected, `I` opens the download confirmation
 directly, `a` accepts a detected candidate, and `x` clears its configured path
 while preserving the executable.
-The decoder is optional and required only for unpacking.
+The decoder is optional and required only for unpacking. If a build or unpack
+cannot use its required tool, the setup menu opens directly over the current
+page. Choose download or an existing executable, then retry the operation.
+Downloads still require license acceptance; Esc leaves the tool unchanged.
 
 ## Background work and progress
 
@@ -88,6 +111,11 @@ the dialog and returns to the original page. In other result dialogs, arrows and
 PgUp/PgDn scroll long messages. `l` opens available build tool output in the dialog;
 Enter or Esc returns to the result. Saving/scaffolding dialogs remain open until
 their writes finish.
+
+Press `a` in a result dialog for its available actions: view tool output, open
+output folder, retry failures, and open application details. Actions appear when
+the corresponding log, output, failed targets or application is available. Esc
+returns to the same result and selected row. Existing shortcuts remain available.
 
 `o` opens the selected result's output folder (or unpack destination). `r` retries
 failed applications only, keeping the original build options or selected unpack

@@ -36,7 +36,10 @@ inpakker new "Mozilla Firefox" --group Browsers --setup-file "Firefox Setup.exe"
 inpakker open "Mozilla Firefox"
 ```
 
-Place the installer in the application's `source` directory, then run:
+To copy an existing installer while creating the application, use
+`--setup-from "C:\Downloads\Firefox Setup.exe"` instead of `--setup-file`.
+This copies only the selected file; add any companion files to the application's
+`source` directory. Otherwise, place the installer there manually, then run:
 
 ```powershell
 inpakker validate
@@ -112,9 +115,11 @@ version, update checks and update installation.
 To download the packaging tool or decoder, open Settings (`s`), select an
 **External tools** row and press Enter → **Download from official source**.
 Accept the upstream license terms to begin. You can also choose an existing
-executable from the same menu.
+executable from the same menu. Attempting to build or unpack with a missing or
+unavailable tool opens this setup menu directly.
 
 On Applications, `/` searches, `Enter` opens details, `n` creates an application,
+and `a` opens the selected application’s action menu.
 `b` builds, `B` opens build options, `v` validates and `u` unpacks. `Ctrl+B`,
 `Ctrl+V` and `Ctrl+U` operate on all applications. `o` opens the selected
 application's root folder in Explorer; on Workspaces it opens the highlighted
@@ -122,12 +127,15 @@ workspace without switching. `r` refreshes in the background.
 
 Creation uses one form with inherited source/output settings and an optional
 group path with suggestions for existing groups. Forms use arrows, Tab and
-Shift+Tab; Esc cancels. F2 browses paths in workspace/tool dialogs, with manual
-entry always available. Backspace edits a focused input before navigating back.
+Shift+Tab; Esc cancels. F2 browses workspace/tool paths or selects an installer
+to copy during application creation. A scrollable review shows the application,
+source, setup and output paths before creation; Esc returns to editing. Manual
+path entry remains available. Backspace edits a focused input before navigating back.
 Ctrl+C cancels an active operation.
 Build, validation and unpack results stay in scrollable dialogs, with colored
 status labels. Build tool output opens inside the dialog and returns to the result.
-Result dialogs offer `o` to open the output folder and `r` to retry failed apps.
+Result dialogs offer an **Actions** menu (`a`), `o` to open the output folder
+and `r` to retry failed apps.
 Press `L` to reopen the last operation result in the current session. Cancellation
 waits for the worker to stop and keeps completed results. Packaging diagnostics
 remain available even when “Show tool output” is off.

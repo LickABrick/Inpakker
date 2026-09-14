@@ -140,7 +140,7 @@ func (m Model) applicationView(width int) string {
 		display = app.App.Config.Name
 	}
 	heading := m.theme.Breadcrumb.Render("Applications / "+app.App.Label()) + "\n\n" +
-		m.theme.PageTitle.Render(app.App.Label()) + "\n" + padBetween(m.theme.TextMuted.Render(display), status, width)
+		m.theme.PageTitle.Render(app.App.Label()) + "\n" + padBetween(m.theme.TextMuted.Render(display), status, width) + "\n" + m.theme.Help.Render("a Actions · build, validate, unpack, folders")
 	if app.App.Status != "valid" {
 		issue := m.theme.PanelTitle.Render("Validation issue") + "\n" + m.theme.StatusError.Render("X "+app.App.Error)
 		return heading + "\n\n" + m.theme.Panel.Width(max(20, width-2)).Render(ansi.Wrap(issue, max(20, width-8), ""))
@@ -294,6 +294,11 @@ func (m Model) footerView(width int) string {
 	if m.resultWorkspaceMatches(m.lastResult) {
 		bindings.short = append([]key.Binding{m.keys.LastResult}, bindings.short...)
 	}
+	if m.workspace != nil && (m.currentRoute().Kind == RouteApplications || m.currentRoute().Kind == RouteApplication) {
+		if _, ok := m.selectedApplication(); ok {
+			bindings.short = append([]key.Binding{m.keys.Actions}, bindings.short...)
+		}
+	}
 	return m.help.View(bindings)
 }
 
@@ -312,6 +317,10 @@ func (m Model) modalView() string {
 		viewport.SetHeight(max(4, min(14, m.height-10)))
 		viewport.SetContent(m.helpContent())
 		body = viewport.View()
+	case ModalActions:
+		return m.actionsView()
+	case ModalCreateReview:
+		return m.createReviewView()
 	case ModalNewApplication, ModalWorkspaceForm, ModalBuildOptions, ModalPackageSelect, ModalUpdate, ModalSetting, ModalTool:
 		if m.form != nil {
 			body = m.form.View()
@@ -390,6 +399,9 @@ func (m Model) resultHelp() string {
 	}
 	if m.displayedResult != nil && len(m.displayedResult.retryIDs) > 0 {
 		help += " · r retry failed"
+	}
+	if m.displayedResult != nil {
+		help = "a actions · " + help
 	}
 	return help
 }
@@ -499,12 +511,12 @@ func (m Model) fullHelp() helpBindings {
 	if m.width < 100 {
 		return helpBindings{full: [][]key.Binding{
 			{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
-			{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.LastResult, m.keys.Help, m.keys.Quit},
+			{m.keys.Actions, m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.LastResult, m.keys.Help, m.keys.Quit},
 		}}
 	}
 	return helpBindings{full: [][]key.Binding{
 		{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
-		{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack},
+		{m.keys.Actions, m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack},
 		{m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh},
 		{m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.LastResult, m.keys.Help, m.keys.Quit},
 	}}

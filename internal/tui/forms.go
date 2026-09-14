@@ -31,14 +31,20 @@ func (m *Model) beginCreate() teaCmd {
 	}
 	m.create = &workspace.CreateOptions{}
 	m.directoryEdited = false
+	return m.beginCreateForm()
+}
+
+func (m *Model) beginCreateForm() teaCmd {
+	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	m.directoryInput = huh.NewInput().Key("directory").Title("Directory name").Value(&m.create.DirectoryName).Validate(validApplicationName)
+	m.pathInput = huh.NewInput().Key("setup").Title("Setup file · F2 browse").Description("Type a filename to add later, or browse to copy an existing installer.").Value(&m.create.SetupFile).Validate(requiredSafePath)
 	m.form = m.formWithTheme(huh.NewGroup(
 		huh.NewInput().Key("name").Title("Name").Value(&m.create.Name).Validate(huh.ValidateNotEmpty()),
 		m.directoryInput,
-		huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Suggestions(m.groups).Validate(validGroupName),
-		huh.NewInput().Title("Setup file").Value(&m.create.SetupFile).Validate(requiredSafePath),
+		huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Value(&m.create.Group).Suggestions(m.groups).Validate(validGroupName),
+		m.pathInput,
 		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", m.workspace.Config.SourceDirectory, m.workspace.Config.OutputDirectory)),
-		formSubmit("Create application"),
+		formSubmit("Review application"),
 	))
 	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	return m.form.Init()
@@ -49,7 +55,7 @@ func formSubmit(label string) *huh.Note {
 }
 
 func (m *Model) beginBuildOptions() teaCmd {
-	if _, ok := m.apps.selected(); !ok {
+	if _, ok := m.selectedApplication(); !ok {
 		m.showMessage("Build unavailable", "No application is selected.")
 		return nil
 	}
