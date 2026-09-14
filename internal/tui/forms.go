@@ -16,6 +16,8 @@ func (m *Model) formWithTheme(fields ...huh.Field) *huh.Form {
 	m.formFields, m.formError = fields, nil
 	keymap := huh.NewDefaultKeyMap()
 	keymap.Quit.SetKeys("ctrl+c", "esc")
+	keymap.Quit.SetHelp("esc", "cancel")
+	m.formKeys = keymap
 	keymap.Input.Prev.SetKeys("up", "shift+tab")
 	keymap.Input.Next.SetKeys("down", "tab", "enter")
 	keymap.Confirm.Prev.SetKeys("up", "shift+tab")
@@ -63,7 +65,7 @@ func (m *Model) beginBuildOptions() teaCmd {
 	}
 	m.buildMode = "build"
 	m.form = m.formWithTheme(
-		huh.NewNote().Description("Choose how to package the selected application."),
+		huh.NewNote().Description("Build: package only when inputs changed.\nRebuild: package again even when unchanged.\nWithout cache: ignore existing build state and do not save new build state."),
 		huh.NewSelect[string]().Key("buildMode").Title("Build mode").Options(
 			huh.NewOption("Build", "build"),
 			huh.NewOption("Rebuild", "force"),

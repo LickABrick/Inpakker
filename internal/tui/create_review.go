@@ -43,7 +43,7 @@ func (m *Model) prepareCreatePreview() {
 
 func (m Model) createReviewView() string {
 	m.prepareCreatePreview()
-	return m.dialog(m.modalTitle, m.modalViewport.View()+"\n\n"+m.theme.Help.Render("enter create · esc edit · ↑↓/pgup/pgdn scroll"))
+	return m.dialog(m.modalTitle, m.modalViewport.View()+scrollPosition(m.modalViewport))
 }
 
 func (m Model) updateCreateReview(msg tea.Msg) (tea.Model, tea.Cmd) {

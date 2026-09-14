@@ -10,7 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"github.com/LickABrick/inpakker/internal/packager"
 	"github.com/LickABrick/inpakker/internal/workspace"
-	"github.com/sahilm/fuzzy"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type ApplicationView struct {
@@ -40,7 +40,7 @@ func newApplicationsPage(theme Theme) applicationsPage {
 	styles.Header, styles.Cell, styles.Selected = theme.TableHeader, theme.TableCell, theme.TableSelected
 	t := table.New(table.WithFocused(true), table.WithKeyMap(tableKeys), table.WithStyles(styles))
 	search := textinput.New()
-	search.Prompt = "Search: "
+	search.Prompt = "Filter: "
 	search.Placeholder = "name, group, path, or state"
 	search.CharLimit = 120
 	setSearchTheme(&search, theme)
@@ -102,6 +102,11 @@ func (p *applicationsPage) refresh(apps []ApplicationView, preferredID string) {
 }
 
 func (p *applicationsPage) applyFilter(preferredID string) {
+	if preferredID == "" {
+		if app, ok := p.selected(); ok {
+			preferredID = app.App.Ref.Relative
+		}
+	}
 	query := strings.TrimSpace(p.search.Value())
 	if query == "" {
 		p.filtered = append([]ApplicationView(nil), p.all...)
@@ -110,10 +115,10 @@ func (p *applicationsPage) applyFilter(preferredID string) {
 		for i, app := range p.all {
 			candidates[i] = searchText(app)
 		}
-		matches := fuzzy.Find(query, candidates)
+		matches := matchIndices(query, candidates)
 		p.filtered = make([]ApplicationView, 0, len(matches))
 		for _, match := range matches {
-			p.filtered = append(p.filtered, p.all[match.Index])
+			p.filtered = append(p.filtered, p.all[match])
 		}
 	}
 	p.rebuildTable()
@@ -138,14 +143,39 @@ func (p *applicationsPage) rebuildTable() {
 		rows = append(rows, p.styledApplicationRow(app))
 	}
 	p.table.SetRows(rows)
-	p.table.SetHeight(max(3, p.height-4))
+	filterHeight := 0
+	if p.searching || p.search.Value() != "" {
+		filterHeight = 2
+	}
+	p.table.SetHeight(max(3, p.height-3-filterHeight))
 	if len(rows) > 0 {
-		p.table.SetCursor(max(0, cursor))
+		p.table.SetCursor(min(len(rows)-1, max(0, cursor)))
 	}
 }
 
 func (p applicationsPage) styledApplicationRow(app ApplicationView) table.Row {
 	row := applicationRow(app, p.width)
+	if p.width < 80 {
+		count, index := 0, 0
+		for i, other := range p.all {
+			if other.App.Label() == app.App.Label() {
+				count++
+			}
+			if other.App.Ref.Relative == app.App.Ref.Relative {
+				index = i + 1
+			}
+		}
+		if count > 1 {
+			prefix := fmt.Sprintf("%d · ", index)
+			path := app.App.Ref.Relative
+			available := max(1, applicationColumns(p.width)[0].Width-ansi.StringWidth(prefix))
+			if ansi.StringWidth(path) > available {
+				path = ansi.TruncateLeft(path, ansi.StringWidth(path)-available+1, "…")
+			}
+			row[0] = prefix + path
+		}
+	}
+
 	validation := p.theme.StatusSuccess.Render(validationLabel(app.App))
 	if app.App.Status != "valid" {
 		validation = p.theme.StatusError.Render(validationLabel(app.App))

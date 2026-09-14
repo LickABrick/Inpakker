@@ -187,7 +187,8 @@ Some useful shortcuts:
 | Key                 | Action                  |
 | ------------------- | ----------------------- |
 | `Enter`             | Open / select           |
-| `/`                 | Search                  |
+| `/`                 | Filter current list     |
+| `:`                 | Command palette         |
 | `n`                 | New application         |
 | `a`                 | Actions                 |
 | `b`                 | Build                   |
@@ -199,7 +200,7 @@ Some useful shortcuts:
 | `w`                 | Workspaces              |
 | `s`                 | Settings                |
 | `i`                 | About                   |
-| `?`                 | Help                    |
+| `?`                 | Contextual help         |
 | `Esc` / `Backspace` | Back                    |
 | `Ctrl+C`            | Cancel active operation |
 

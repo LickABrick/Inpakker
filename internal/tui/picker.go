@@ -9,6 +9,12 @@ import (
 
 func (m *Model) beginPicker() tea.Cmd {
 	m.picker = filepicker.New()
+	m.picker.KeyMap.Back.SetHelp("←", "parent directory")
+	m.picker.KeyMap.Open.SetHelp("→", "directory")
+	m.picker.KeyMap.Up = m.keys.Up
+	m.picker.KeyMap.Down = m.keys.Down
+	m.picker.KeyMap.PageUp = m.keys.PageUp
+	m.picker.KeyMap.PageDown = m.keys.PageDown
 	m.picker.CurrentDirectory = m.root
 	if m.pathInput != nil {
 		path, _ := m.pathInput.GetValue().(string)
@@ -61,4 +67,19 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.picking = false
 	}
 	return m, cmd
+}
+
+func (m Model) pickerTitle() string {
+	switch m.modal {
+	case ModalWorkspaceForm:
+		return "Choose workspace folder"
+	case ModalNewApplication:
+		return "Choose installer"
+	case ModalTool:
+		if m.toolID == "decoder" {
+			return "Choose package decoder"
+		}
+		return "Choose Content Prep Tool"
+	}
+	return "Choose directory"
 }

@@ -28,16 +28,41 @@ func (m *Model) pushRoute(route Route) {
 	if current.Kind == route.Kind && current.AppID == route.AppID {
 		return
 	}
-	m.routes = append(m.routes, route)
-	if route.Kind == RouteApplication {
+	switch route.Kind {
+	case RouteApplications, RouteWorkspaces, RouteSettings, RouteAbout:
+		m.routes = []Route{route}
+	default:
+		m.routes = append(m.routes, route)
+	}
+	if route.Kind == RouteApplication || route.Kind == RouteAbout {
 		m.detailViewport.GotoTop()
 	}
 }
 
 func (m *Model) popRoute() bool {
 	if len(m.routes) <= 1 {
+		if m.currentRoute().Kind != RouteApplications {
+			m.routes = []Route{{Kind: RouteApplications}}
+			return true
+		}
 		return false
 	}
 	m.routes = m.routes[:len(m.routes)-1]
 	return true
+}
+
+func (m Model) routeTitle() string {
+	switch m.currentRoute().Kind {
+	case RouteWorkspaces:
+		return "Workspaces"
+	case RouteSettings:
+		return "Settings"
+	case RouteAbout:
+		return "About"
+	case RouteApplication:
+		return "Application"
+	case RouteDiagnostics:
+		return "Workspace diagnostics"
+	}
+	return "Applications"
 }

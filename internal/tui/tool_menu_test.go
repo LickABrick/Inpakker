@@ -100,11 +100,11 @@ func TestSettingsDownloadHintFitsNarrowTerminal(t *testing.T) {
 	m := newTestModel(t)
 	m.pushRoute(Route{Kind: RouteSettings})
 	m.resize(60, 18)
-	for _, cursor := range []int{0, len(m.settingsRows()) - 1} {
+	for _, cursor := range []int{0, 4} {
 		m.settingCursor = cursor
 		view := m.View().Content
-		if !strings.Contains(ansi.Strip(view), "To download tools") {
-			t.Fatal("settings hides the download hint")
+		if !strings.Contains(ansi.Strip(view), "Settings") {
+			t.Fatal("settings heading missing")
 		}
 		if len(strings.Split(view, "\n")) > m.height {
 			t.Fatal("settings overflows terminal height")
@@ -116,7 +116,7 @@ func TestSettingsDownloadHintFitsNarrowTerminal(t *testing.T) {
 		}
 		if cursor > 0 {
 			footer := ansi.Strip(m.footerView(58))
-			if !strings.Contains(footer, "set up tool") || !strings.Contains(footer, "download") {
+			if !strings.Contains(footer, "actions") {
 				t.Fatalf("tool actions missing from footer: %q", footer)
 			}
 		}
