@@ -69,12 +69,13 @@ func (m Model) handleRegistry(msg registryMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m Model) filteredWorkspaces() []workspace.RegistrationView {
-	query := strings.ToLower(strings.TrimSpace(m.workspaceSearch.Value()))
+	candidates := make([]string, len(m.registrations))
+	for i, v := range m.registrations {
+		candidates[i] = v.Name + " " + v.Path
+	}
 	result := []workspace.RegistrationView{}
-	for _, view := range m.registrations {
-		if query == "" || strings.Contains(strings.ToLower(view.Name+" "+view.Path), query) {
-			result = append(result, view)
-		}
+	for _, i := range matchIndices(m.workspaceSearch.Value(), candidates) {
+		result = append(result, m.registrations[i])
 	}
 	return result
 }
@@ -88,10 +89,16 @@ func (m Model) highlightedWorkspace() (workspace.RegistrationView, bool) {
 func (m Model) updateWorkspaceSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if pressed, ok := msg.(tea.KeyPressMsg); ok {
 		switch pressed.Code {
-		case tea.KeyEscape, tea.KeyEnter:
+		case tea.KeyEscape:
+			m.workspaceSearch.SetValue("")
+			m.workspaceCursor = 0
 			m.workspaceSearching = false
 			m.workspaceSearch.Blur()
 			return m, nil
+		case tea.KeyEnter:
+			m.workspaceSearching = false
+			m.workspaceSearch.Blur()
+			return m.updateWorkspaces(pressed)
 		case tea.KeyUp:
 			m.workspaceCursor = max(0, m.workspaceCursor-1)
 			return m, nil
@@ -107,6 +114,16 @@ func (m Model) updateWorkspaceSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
+	case key.Matches(pressed, m.keys.Escape) && m.workspaceSearch.Value() != "":
+		m.workspaceSearch.SetValue("")
+		m.workspaceCursor = 0
+		return m, nil
+	case key.Matches(pressed, m.keys.PageUp):
+		m.workspaceCursor = max(0, m.workspaceCursor-max(1, m.height-12))
+		return m, nil
+	case key.Matches(pressed, m.keys.PageDown):
+		m.workspaceCursor = min(max(0, len(m.filteredWorkspaces())-1), m.workspaceCursor+max(1, m.height-12))
+		return m, nil
 	case key.Matches(pressed, m.keys.Up):
 		m.workspaceCursor = max(0, m.workspaceCursor-1)
 		return m, nil
@@ -128,24 +145,27 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case pressed.Text == "n":
+	case key.Matches(pressed, m.keys.NewApp):
 		return m, m.beginWorkspaceCreate()
-	case pressed.Text == "a":
+	case key.Matches(pressed, m.keys.Actions):
+		m.beginActions()
+		return m, nil
+	case key.Matches(pressed, m.keys.AddWorkspace):
 		return m, m.beginWorkspacePath("add", "")
-	case pressed.Text == "r":
+	case key.Matches(pressed, m.keys.RelinkWorkspace):
 		if view, ok := m.highlightedWorkspace(); ok {
 			return m, m.beginWorkspacePath("relink", view.ID)
 		}
 		return m, nil
-	case pressed.Text == "x":
+	case key.Matches(pressed, m.keys.RemoveWorkspace):
 		if view, ok := m.highlightedWorkspace(); ok {
 			m.workspaceAction, m.workspaceTarget, m.accepted = "remove", view.ID, false
-			m.modal, m.modalTitle = ModalWorkspaceForm, "Remove workspace"
-			m.form = m.formWithTheme(huh.NewConfirm().Key("accepted").Title("Remove " + view.Name + " from Inpakker?").Description("The workspace folder and its files will not be deleted."))
+			m.modal, m.modalTitle = ModalWorkspaceForm, "Remove workspace registration?"
+			m.form = m.formWithTheme(huh.NewConfirm().Key("accepted").Title("Remove registration for " + view.Name + "?").Description("The workspace folder and its files will not be deleted."))
 			return m, m.form.Init()
 		}
 		return m, nil
-	case pressed.Text == "e":
+	case key.Matches(pressed, m.keys.RenameWorkspace):
 		if view, ok := m.highlightedWorkspace(); ok && view.Config != nil {
 			m.editScope, m.editKey, m.editValue, m.workspaceTarget = "registered", "name", view.Name, view.Path
 			return m, m.beginSettingForm()
@@ -249,6 +269,19 @@ func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		if action == "actions" {
 			nextAction := m.form.GetString("toolAction")
 			m.closeModal()
+			if nextAction == "candidate" || nextAction == "clear" {
+				path := ""
+				for _, status := range m.toolStatuses {
+					if status.ID == id && nextAction == "candidate" {
+						path = status.Candidate
+					}
+				}
+				return m, func() tea.Msg {
+					err := toolmanager.Set(id, path)
+					user, _ := config.LoadUser()
+					return toolsMsg{user: user, err: err}
+				}
+			}
 			return m, tea.Sequence(formCmd, m.beginToolForm(nextAction))
 		}
 		m.closeModal()
@@ -313,21 +346,32 @@ func (m Model) handleWorkspaceAction(msg workspaceActionMsg) (tea.Model, tea.Cmd
 func (m Model) settingsRows() []settingRow {
 	d := m.user.WorkspaceDefaults
 	rows := []settingRow{
-		{"Show tool output", fmt.Sprint(m.user.Preferences.ShowToolOutput), "preferences.showToolOutput", "global"},
 		{"Applications directory", d.ApplicationsDirectory, "workspaceDefaults.applicationsDirectory", "global"},
 		{"Source directory", d.SourceDirectory, "workspaceDefaults.sourceDirectory", "global"},
 		{"Output directory", d.OutputDirectory, "workspaceDefaults.outputDirectory", "global"},
 	}
+	rows = append(rows, settingRow{"Show tool output", fmt.Sprint(m.user.Preferences.ShowToolOutput), "preferences.showToolOutput", "global"})
+	rows = append(rows, settingRow{"Content Prep Tool", m.user.Tools.ContentPrepTool.Path, "content-prep", "tool"}, settingRow{"Package decoder · Optional", m.user.Tools.Decoder.Path, "decoder", "tool"})
 	if m.workspace != nil {
 		cfg := m.workspace.Config
 		rows = append(rows,
 			settingRow{"Name", cfg.Name, "name", "workspace"}, settingRow{"Applications directory", cfg.ApplicationsDirectory, "applicationsDirectory", "workspace"}, settingRow{"Source directory", cfg.SourceDirectory, "sourceDirectory", "workspace"}, settingRow{"Output directory", cfg.OutputDirectory, "outputDirectory", "workspace"})
 	}
-	rows = append(rows, settingRow{"Content Prep Tool", m.user.Tools.ContentPrepTool.Path, "content-prep", "tool"}, settingRow{"Package decoder · Optional", m.user.Tools.Decoder.Path, "decoder", "tool"})
-	return rows
+	candidates := make([]string, len(rows))
+	for i, row := range rows {
+		candidates[i] = row.label + " " + row.value + " " + settingSection(row)
+	}
+	filtered := make([]settingRow, 0, len(rows))
+	for _, i := range matchIndices(m.settingsFilter.input.Value(), candidates) {
+		filtered = append(filtered, rows[i])
+	}
+	return filtered
 }
 func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rows := m.settingsRows()
+	if len(rows) == 0 {
+		return m.updateGlobalKey(pressed)
+	}
 	m.settingCursor = min(m.settingCursor, len(rows)-1)
 	switch {
 	case key.Matches(pressed, m.keys.Up):
@@ -336,7 +380,7 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(pressed, m.keys.Down):
 		m.settingCursor = min(len(rows)-1, m.settingCursor+1)
 		return m, nil
-	case pressed.Text == "d":
+	case key.Matches(pressed, m.keys.DetectTools):
 		if !m.detecting {
 			m.detecting = true
 			return m, tea.Batch(m.spinner.Tick, m.detectToolsCmd())
@@ -351,13 +395,13 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.editScope, m.editKey, m.editValue = row.scope, row.key, row.value
 		m.settingError = nil
 		return m, m.beginSettingForm()
-	case pressed.Text == "I":
+	case key.Matches(pressed, m.keys.DownloadTool):
 		if row := rows[m.settingCursor]; row.scope == "tool" {
 			m.toolID = row.key
 			return m, m.beginToolForm("install")
 		}
 		return m, nil
-	case pressed.Text == "x":
+	case key.Matches(pressed, m.keys.ClearTool):
 		if row := rows[m.settingCursor]; row.scope == "tool" {
 			id := row.key
 			return m, func() tea.Msg {
@@ -367,19 +411,12 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case pressed.Text == "a":
-		row := rows[m.settingCursor]
-		for _, status := range m.toolStatuses {
-			if status.ID == row.key && status.Candidate != "" {
-				id, path := row.key, status.Candidate
-				return m, func() tea.Msg {
-					err := toolmanager.Set(id, path)
-					user, _ := config.LoadUser()
-					return toolsMsg{user: user, err: err}
-				}
-			}
+	case key.Matches(pressed, m.keys.Actions):
+		if row := rows[m.settingCursor]; row.scope == "tool" {
+			m.toolID = row.key
+			return m, m.beginToolForm("actions")
 		}
-		return m, nil
+
 	}
 	return m.updateGlobalKey(pressed)
 }
@@ -389,13 +426,20 @@ func (m *Model) beginSettingForm() tea.Cmd {
 	if m.editScope != "global" && m.editKey != "name" {
 		description = "Applications using this workspace default will use the new directory. Existing files will not be moved automatically."
 	}
-	m.modal, m.modalTitle = ModalSetting, "Edit setting"
+	label := m.editKey
+	for _, row := range m.settingsRows() {
+		if row.key == m.editKey {
+			label = row.label
+			break
+		}
+	}
+	m.modal, m.modalTitle = ModalSetting, "Edit "+strings.ToLower(label)
 	var field huh.Field
 	if m.editKey == "preferences.showToolOutput" {
 		enabled := value == "true"
 		field = huh.NewConfirm().Key("value").Title("Show tool output").Affirmative("On").Negative("Off").Value(&enabled)
 	} else {
-		field = checkInput(huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value), m.editKey, m.settingValidator())
+		field = checkInput(huh.NewInput().Key("value").Title(label).Description(description).Value(&value), label, m.settingValidator())
 	}
 	m.form = m.formWithTheme(field, formSubmit("Save setting"))
 	return m.form.Init()
@@ -444,11 +488,17 @@ func (m *Model) beginToolForm(action string) tea.Cmd {
 	definition, _ := toolmanager.DefinitionFor(m.toolID)
 	m.modal, m.modalTitle = ModalTool, definition.Name
 	if action == "actions" {
+		options := []huh.Option[string]{huh.NewOption("Download from official source", "install"), huh.NewOption("Choose existing executable", "choose")}
+		for _, status := range m.toolStatuses {
+			if status.ID == m.toolID && status.Candidate != "" {
+				options = append(options, huh.NewOption("Use detected candidate", "candidate"))
+			}
+			if status.ID == m.toolID && status.Config.Path != "" {
+				options = append(options, huh.NewOption("Clear configuration", "clear"))
+			}
+		}
 		m.form = m.formWithTheme(
-			huh.NewSelect[string]().Key("toolAction").Title("Set up tool").Options(
-				huh.NewOption("Download from official source", "install"),
-				huh.NewOption("Choose existing executable", "choose"),
-			),
+			huh.NewSelect[string]().Key("toolAction").Title("Set up tool").Options(options...),
 		)
 	} else if action == "install" {
 		m.form = m.formWithTheme(
@@ -518,9 +568,9 @@ func (m Model) handleTools(msg toolsMsg) (tea.Model, tea.Cmd) {
 		copy.User = m.user
 		m.workspace = &copy
 		m.refreshing = false
-		return m, m.refreshCmd("")
+		return m, tea.Batch(m.refreshCmd(""), m.inspectToolStatusCmd())
 	}
-	return m, nil
+	return m, m.inspectToolStatusCmd()
 }
 func (m Model) folderTarget() string {
 	switch m.currentRoute().Kind {

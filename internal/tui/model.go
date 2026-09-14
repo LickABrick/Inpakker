@@ -51,6 +51,7 @@ const (
 	ModalLogs
 	ModalActions
 	ModalCreateReview
+	ModalPalette
 )
 
 type operationKind int
@@ -188,6 +189,8 @@ type Model struct {
 	workspaceSearching bool
 	registryGeneration int
 	settingCursor      int
+	settingsFilter     listFilter
+	diagnosticsFilter  listFilter
 	editKey            string
 	editValue          string
 	editScope          string
@@ -216,25 +219,39 @@ type Model struct {
 	routes        []Route
 	updateResult  updater.Result
 
-	modal           ModalKind
-	modalTitle      string
-	modalBody       string
-	modalErr        error
-	modalHasLog     bool
-	logReturnModal  ModalKind
-	form            *huh.Form
-	formFields      []huh.Field
-	formError       error
-	create          *workspace.CreateOptions
-	workspaceDraft  *workspace.CreateWorkspaceOptions
-	picker          filepicker.Model
-	picking         bool
-	pathInput       *huh.Input
-	directoryInput  *huh.Input
-	directoryEdited bool
-	actions         []menuAction
-	actionCursor    int
-	actionReturn    ModalKind
+	paletteSearch      textinput.Model
+	paletteCommands    []ContextBinding
+	paletteCursor      int
+	paletteRoutes      map[string]RouteKind
+	paletteAppID       string
+	paletteAppUUID     string
+	paletteWorkspaceID string
+	diagnosticCursor   int
+	helpContext        []ContextBinding
+	helpReturn         ModalKind
+	helpReturnTitle    string
+	modal              ModalKind
+	modalTitle         string
+	modalBody          string
+	modalErr           error
+	modalHasLog        bool
+	logReturnModal     ModalKind
+	form               *huh.Form
+	formKeys           *huh.KeyMap
+	formFields         []huh.Field
+	formError          error
+	create             *workspace.CreateOptions
+	workspaceDraft     *workspace.CreateWorkspaceOptions
+	picker             filepicker.Model
+	picking            bool
+	pathInput          *huh.Input
+	directoryInput     *huh.Input
+	directoryEdited    bool
+	actions            []menuAction
+	actionCursor       int
+	actionAppID        string
+	actionWorkspaceID  string
+	actionReturn       ModalKind
 
 	updateConfirmed bool
 	buildMode       string
@@ -333,6 +350,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWorkspaceAction(msg)
 	case settingsMsg:
 		return m.handleSettings(msg)
+	case toolInspectionMsg:
+		if msg.tools == m.user.Tools && msg.root == m.root {
+			m.toolStatuses = msg.statuses
+		}
+		return m, nil
 	case toolsMsg:
 		return m.rememberResult(m.handleTools(msg))
 	case folderMsg:
@@ -411,7 +433,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.modal != ModalNone {
+		if isKey && key.Matches(keyPress, m.keys.Help) && m.form == nil && !m.picking && m.modal != ModalHelp && m.modal != ModalPalette && m.modal != ModalProgress {
+			m.helpContext = m.effectiveBindings()
+			m.helpReturn = m.modal
+			m.helpReturnTitle = m.modalTitle
+			m.modal = ModalHelp
+			m.modalTitle = "Help · " + m.helpReturnTitle
+			m.helpViewport.GotoTop()
+			return m, nil
+		}
 		return m.updateModal(msg)
+	}
+	if f := m.otherFilter(); f != nil && f.editing {
+		return m.updateOtherFilter(msg)
 	}
 	if m.workspaceSearching && m.currentRoute().Kind == RouteWorkspaces {
 		return m.updateWorkspaceSearch(msg)
@@ -423,20 +457,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePage(msg)
 	}
 
-	if m.currentRoute().Kind == RouteApplications && (key.Matches(keyPress, m.keys.Up) || key.Matches(keyPress, m.keys.Down)) {
-		return m.updatePage(msg)
-	}
-	if m.currentRoute().Kind == RouteApplication && key.Matches(keyPress, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
-		return m.updatePage(msg)
-	}
-
-	if m.currentRoute().Kind == RouteWorkspaces {
-		return m.updateWorkspaces(keyPress)
-	}
-	if m.currentRoute().Kind == RouteSettings {
-		return m.updateSettings(keyPress)
-	}
-	return m.updateGlobalKey(keyPress)
+	return m.dispatchPageKey(keyPress)
 }
 
 func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -444,6 +465,11 @@ func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RouteApplications:
 		var cmd tea.Cmd
 		m.apps.table, cmd = m.apps.table.Update(msg)
+		return m, cmd
+	case RouteAbout:
+		m.detailViewport.SetContent(m.aboutView(max(20, m.width-8)))
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
 		return m, cmd
 	case RouteApplication:
 		m.detailViewport.SetContent(m.applicationView(max(20, m.width-8)))
@@ -470,7 +496,7 @@ func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushRoute(Route{Kind: RouteApplication, AppID: app.App.Ref.Relative})
 			}
 			return m, nil
-		case key.Matches(keyPress, m.keys.Up, m.keys.Down):
+		case keyPress.Code == tea.KeyUp || keyPress.Code == tea.KeyDown:
 			var cmd tea.Cmd
 			m.apps.table, cmd = m.apps.table.Update(msg)
 			return m, cmd
@@ -495,8 +521,15 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Matches(pressed, m.keys.Help) {
-		m.modal, m.modalTitle = ModalHelp, "Keyboard shortcuts"
+		m.helpReturn = ModalNone
+		m.helpContext = m.pageBindings()
+		m.modal, m.modalTitle = ModalHelp, "Help · "+m.routeTitle()
 		m.helpViewport.GotoTop()
+		return m, nil
+	}
+	if key.Matches(pressed, m.keys.Escape) && m.currentRoute().Kind == RouteApplications && m.apps.search.Value() != "" {
+		m.apps.search.SetValue("")
+		m.apps.applyFilter("")
 		return m, nil
 	}
 	if key.Matches(pressed, m.keys.Back, m.keys.Escape) && m.popRoute() {
@@ -521,20 +554,20 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.openFolderCmd()
 	}
 	if m.currentRoute().Kind == RouteAbout {
-		if pressed.Text == "c" && !m.checkingUpdate {
+		if key.Matches(pressed, m.keys.CheckUpdates) && !m.checkingUpdate {
 			m.checkingUpdate = true
 			return m, tea.Batch(m.spinner.Tick, m.manualUpdateCmd())
 		}
-		if pressed.Text == "u" {
+		if key.Matches(pressed, m.keys.InstallUpdate) {
 			return m, m.beginUpdate()
 		}
 		return m, nil
 	}
 	if m.workspace == nil {
-		if pressed.Text == "n" {
+		if key.Matches(pressed, m.keys.NewApp) {
 			return m, m.beginWorkspaceCreate()
 		}
-		if pressed.Text == "a" {
+		if key.Matches(pressed, m.keys.Actions) {
 			return m, m.beginWorkspacePath("add", "")
 		}
 		return m, nil
@@ -550,6 +583,7 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(pressed, m.keys.Search):
 			m.apps.searching = true
+			m.apps.rebuildTable()
 			return m, m.apps.search.Focus()
 		case key.Matches(pressed, m.keys.NewApp):
 			return m, m.beginCreate()
@@ -596,6 +630,9 @@ func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.modal == ModalPalette {
+		return m.updatePalette(msg)
+	}
 	if m.modal == ModalActions {
 		return m.updateActions(msg)
 	}
@@ -657,7 +694,7 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.displayedResult != nil && (m.modal == ModalMessage || m.modal == ModalResults) {
-			if pressed.Text == "r" && len(m.displayedResult.retryIDs) > 0 {
+			if key.Matches(pressed, m.keys.Refresh) && len(m.displayedResult.retryIDs) > 0 {
 				return m.retryFailed()
 			}
 			if key.Matches(pressed, m.keys.Folder) {
@@ -703,7 +740,7 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpViewport, cmd = m.helpViewport.Update(msg)
 			return m, cmd
 		}
-		if m.modal == ModalMessage && key.Matches(pressed, m.keys.Diagnostics) {
+		if m.modal == ModalMessage && m.workspace != nil && key.Matches(pressed, m.keys.Diagnostics) {
 			m.closeModal()
 			m.openDiagnostics()
 			return m, nil
@@ -715,6 +752,12 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open, m.keys.Help) {
+			if m.modal == ModalHelp && m.helpReturn != ModalNone {
+				m.modal = m.helpReturn
+				m.modalTitle = m.helpReturnTitle
+				m.helpReturn = ModalNone
+				return m, nil
+			}
 			m.closeModal()
 		}
 	}
@@ -758,9 +801,17 @@ func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 
 func (m *Model) resize(width, height int) {
 	m.width, m.height = width, height
+	m.workspaceSearch.SetWidth(max(10, width-18))
+	m.settingsFilter.input.SetWidth(max(10, width-18))
+	m.diagnosticsFilter.input.SetWidth(max(10, width-18))
+	m.paletteSearch.SetWidth(max(10, modalInnerWidth(width)-11))
 	contentWidth := max(20, width-8)
 	contentHeight := max(5, height-6)
-	m.apps.resize(contentWidth, contentHeight)
+	listWidth := contentWidth
+	if contentWidth >= 92 {
+		listWidth = (contentWidth - 3) / 2
+	}
+	m.apps.resize(listWidth, contentHeight)
 	m.help.SetWidth(contentWidth)
 	m.detailViewport.SetWidth(contentWidth)
 	m.detailViewport.SetHeight(max(3, height-7))
