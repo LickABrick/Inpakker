@@ -141,7 +141,7 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if view, ok := m.highlightedWorkspace(); ok {
 			m.workspaceAction, m.workspaceTarget, m.accepted = "remove", view.ID, false
 			m.modal, m.modalTitle = ModalWorkspaceForm, "Remove workspace"
-			m.form = m.formWithTheme(huh.NewGroup(huh.NewConfirm().Key("accepted").Title("Remove " + view.Name + " from Inpakker?").Description("The workspace folder and its files will not be deleted.")))
+			m.form = m.formWithTheme(huh.NewConfirm().Key("accepted").Title("Remove " + view.Name + " from Inpakker?").Description("The workspace folder and its files will not be deleted."))
 			return m, m.form.Init()
 		}
 		return m, nil
@@ -159,15 +159,15 @@ func (m *Model) beginWorkspaceCreate() tea.Cmd {
 	m.workspaceDraft = &workspace.CreateWorkspaceOptions{ApplicationsDirectory: defaults.ApplicationsDirectory, SourceDirectory: defaults.SourceDirectory, OutputDirectory: defaults.OutputDirectory}
 	m.workspaceAction = "create"
 	m.modal, m.modalTitle = ModalWorkspaceForm, "Create workspace"
-	m.pathInput = huh.NewInput().Title("Location · F2 browse").Value(&m.workspaceDraft.Root).Validate(huh.ValidateNotEmpty())
-	m.form = m.formWithTheme(huh.NewGroup(
-		huh.NewInput().Title("Name").Value(&m.workspaceDraft.Name).Validate(huh.ValidateNotEmpty()),
-		m.pathInput,
-		huh.NewInput().Title("Applications directory").Value(&m.workspaceDraft.ApplicationsDirectory).Validate(safeWorkspacePath),
-		huh.NewInput().Title("Source directory").Value(&m.workspaceDraft.SourceDirectory).Validate(safeWorkspacePath),
-		huh.NewInput().Title("Output directory").Value(&m.workspaceDraft.OutputDirectory).Validate(safeWorkspacePath),
+	m.pathInput = huh.NewInput().Key("path").Title("Location · F2 browse").Value(&m.workspaceDraft.Root)
+	m.form = m.formWithTheme(
+		checkInput(huh.NewInput().Key("name").Title("Name").Value(&m.workspaceDraft.Name), "Name", requiredText),
+		checkInput(m.pathInput, "Location", requiredText),
+		checkInput(huh.NewInput().Key("applications").Title("Applications directory").Value(&m.workspaceDraft.ApplicationsDirectory), "Applications directory", safeWorkspacePath),
+		checkInput(huh.NewInput().Key("source").Title("Source directory").Value(&m.workspaceDraft.SourceDirectory), "Source directory", safeWorkspacePath),
+		checkInput(huh.NewInput().Key("output").Title("Output directory").Value(&m.workspaceDraft.OutputDirectory), "Output directory", safeWorkspacePath),
 		formSubmit("Create workspace"),
-	))
+	)
 	return m.form.Init()
 }
 func (m *Model) beginWorkspacePath(action, target string) tea.Cmd {
@@ -177,8 +177,8 @@ func (m *Model) beginWorkspacePath(action, target string) tea.Cmd {
 		title = "Relink workspace"
 	}
 	m.modal, m.modalTitle = ModalWorkspaceForm, title
-	m.pathInput = huh.NewInput().Key("path").Title("Workspace directory · F2 browse").Description("Directory containing inpakker.workspace.json").Validate(huh.ValidateNotEmpty())
-	m.form = m.formWithTheme(huh.NewGroup(m.pathInput, formSubmit(title)))
+	m.pathInput = huh.NewInput().Key("path").Title("Workspace directory · F2 browse").Description("Directory containing inpakker.workspace.json")
+	m.form = m.formWithTheme(checkInput(m.pathInput, "Workspace directory", requiredText), formSubmit(title))
 	return m.form.Init()
 }
 func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -395,9 +395,9 @@ func (m *Model) beginSettingForm() tea.Cmd {
 		enabled := value == "true"
 		field = huh.NewConfirm().Key("value").Title("Show tool output").Affirmative("On").Negative("Off").Value(&enabled)
 	} else {
-		field = huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value).Validate(m.settingValidator())
+		field = checkInput(huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value), m.editKey, m.settingValidator())
 	}
-	m.form = m.formWithTheme(huh.NewGroup(field, formSubmit("Save setting")))
+	m.form = m.formWithTheme(field, formSubmit("Save setting"))
 	return m.form.Init()
 }
 
@@ -444,21 +444,21 @@ func (m *Model) beginToolForm(action string) tea.Cmd {
 	definition, _ := toolmanager.DefinitionFor(m.toolID)
 	m.modal, m.modalTitle = ModalTool, definition.Name
 	if action == "actions" {
-		m.form = m.formWithTheme(huh.NewGroup(
+		m.form = m.formWithTheme(
 			huh.NewSelect[string]().Key("toolAction").Title("Set up tool").Options(
 				huh.NewOption("Download from official source", "install"),
 				huh.NewOption("Choose existing executable", "choose"),
 			),
-		))
+		)
 	} else if action == "install" {
-		m.form = m.formWithTheme(huh.NewGroup(
+		m.form = m.formWithTheme(
 			huh.NewNote().Description("Provided by "+definition.Repository+" under separate upstream terms.\nSource/license: "+definition.LicenseURL),
 			huh.NewConfirm().Key("accepted").Title("Download this tool?").
 				Affirmative("Accept and download").Negative("Configure later"),
-		))
+		)
 	} else {
-		m.pathInput = huh.NewInput().Key("path").Title("Executable path · F2 browse").Validate(huh.ValidateNotEmpty())
-		m.form = m.formWithTheme(huh.NewGroup(m.pathInput, formSubmit("Save path")))
+		m.pathInput = huh.NewInput().Key("path").Title("Executable path · F2 browse")
+		m.form = m.formWithTheme(checkInput(m.pathInput, "Executable path", requiredText), formSubmit("Save path"))
 	}
 	return m.form.Init()
 }

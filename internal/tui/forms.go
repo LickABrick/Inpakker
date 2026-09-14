@@ -12,12 +12,14 @@ import (
 	"github.com/LickABrick/inpakker/internal/workspace"
 )
 
-func (m *Model) formWithTheme(groups ...*huh.Group) *huh.Form {
+func (m *Model) formWithTheme(fields ...huh.Field) *huh.Form {
+	m.formFields, m.formError = fields, nil
 	keymap := huh.NewDefaultKeyMap()
 	keymap.Quit.SetKeys("ctrl+c", "esc")
 	keymap.Input.Prev.SetKeys("up", "shift+tab")
 	keymap.Input.Next.SetKeys("down", "tab", "enter")
-	return huh.NewForm(groups...).
+	keymap.Confirm.Prev.SetKeys("up", "shift+tab")
+	return huh.NewForm(huh.NewGroup(fields...)).
 		WithKeyMap(keymap).
 		WithTheme(m.theme.HuhTheme()).
 		WithShowHelp(false).
@@ -36,22 +38,22 @@ func (m *Model) beginCreate() teaCmd {
 
 func (m *Model) beginCreateForm() teaCmd {
 	m.modal, m.modalTitle = ModalNewApplication, "Create application"
-	m.directoryInput = huh.NewInput().Key("directory").Title("Directory name").Value(&m.create.DirectoryName).Validate(validApplicationName)
-	m.pathInput = huh.NewInput().Key("setup").Title("Setup file · F2 browse").Description("Type a filename to add later, or browse to copy an existing installer.").Value(&m.create.SetupFile).Validate(requiredSafePath)
-	m.form = m.formWithTheme(huh.NewGroup(
-		huh.NewInput().Key("name").Title("Name").Value(&m.create.Name).Validate(huh.ValidateNotEmpty()),
-		m.directoryInput,
-		huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Value(&m.create.Group).Suggestions(m.groups).Validate(validGroupName),
-		m.pathInput,
+	m.directoryInput = huh.NewInput().Key("directory").Title("Directory name").Value(&m.create.DirectoryName)
+	m.pathInput = huh.NewInput().Key("setup").Title("Setup file · F2 browse").Description("Type a filename to add later, or browse to copy an existing installer.").Value(&m.create.SetupFile)
+	m.form = m.formWithTheme(
+		checkInput(huh.NewInput().Key("name").Title("Name").Value(&m.create.Name), "Name", requiredText),
+		checkInput(m.directoryInput, "Directory name", validApplicationName),
+		checkInput(huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Value(&m.create.Group).Suggestions(m.groups), "Group", validGroupName),
+		checkInput(m.pathInput, "Setup file", requiredSafePath),
 		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", m.workspace.Config.SourceDirectory, m.workspace.Config.OutputDirectory)),
 		formSubmit("Review application"),
-	))
+	)
 	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	return m.form.Init()
 }
 
-func formSubmit(label string) *huh.Note {
-	return huh.NewNote().Next(true).NextLabel(label)
+func formSubmit(label string) *huh.Confirm {
+	return huh.NewConfirm().Key("submit").Affirmative(label).Negative("")
 }
 
 func (m *Model) beginBuildOptions() teaCmd {
@@ -60,14 +62,14 @@ func (m *Model) beginBuildOptions() teaCmd {
 		return nil
 	}
 	m.buildMode = "build"
-	m.form = m.formWithTheme(huh.NewGroup(
+	m.form = m.formWithTheme(
 		huh.NewNote().Description("Choose how to package the selected application."),
 		huh.NewSelect[string]().Key("buildMode").Title("Build mode").Options(
 			huh.NewOption("Build", "build"),
 			huh.NewOption("Rebuild", "force"),
 			huh.NewOption("Build without cache", "no-cache"),
 		),
-	))
+	)
 	m.modal, m.modalTitle = ModalBuildOptions, "Build options"
 	return m.form.Init()
 }
@@ -78,10 +80,10 @@ func (m *Model) beginPackageSelect(packages []string) teaCmd {
 	for _, item := range packages {
 		options = append(options, huh.NewOption(filepath.Base(item), item))
 	}
-	m.form = m.formWithTheme(huh.NewGroup(
+	m.form = m.formWithTheme(
 		huh.NewNote().Description("This application has multiple packages. Choose one to unpack."),
 		huh.NewSelect[string]().Key("package").Title("Package").Options(options...),
-	))
+	)
 	m.modal, m.modalTitle = ModalPackageSelect, "Select package to unpack"
 	return m.form.Init()
 }
@@ -97,10 +99,10 @@ func (m *Model) beginUpdate() teaCmd {
 	}
 	m.updateConfirmed = false
 	description := fmt.Sprintf("Current       v%s\nAvailable     v%s\n\nThe release will be downloaded and its signature and checksum verified.", m.updateResult.CurrentVersion, m.updateResult.LatestVersion)
-	m.form = m.formWithTheme(huh.NewGroup(
+	m.form = m.formWithTheme(
 		huh.NewNote().Description(description),
 		huh.NewConfirm().Key("installUpdate").Title("Install update?").Affirmative("Install update").Negative("Cancel"),
-	))
+	)
 	m.modal, m.modalTitle = ModalUpdate, "Update Inpakker"
 	return m.form.Init()
 }
@@ -120,7 +122,7 @@ func validGroupName(value string) error {
 }
 
 func tuiSafePath(value string) error {
-	if value == "" || !pathutil.IsSafeRelative(value) {
+	if value == "" || !pathutil.ValidRelative(value) {
 		return errors.New("path must remain within the application directory")
 	}
 	return nil
@@ -134,7 +136,7 @@ func requiredSafePath(value string) error {
 }
 
 func safeWorkspacePath(value string) error {
-	if strings.TrimSpace(value) == "" || !pathutil.IsSafeRelative(value) {
+	if strings.TrimSpace(value) == "" || !pathutil.ValidRelative(value) {
 		return errors.New("use a relative directory within the workspace")
 	}
 	return nil

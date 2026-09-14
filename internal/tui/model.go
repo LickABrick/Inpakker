@@ -223,6 +223,8 @@ type Model struct {
 	modalHasLog     bool
 	logReturnModal  ModalKind
 	form            *huh.Form
+	formFields      []huh.Field
+	formError       error
 	create          *workspace.CreateOptions
 	workspaceDraft  *workspace.CreateWorkspaceOptions
 	picker          filepicker.Model
@@ -612,6 +614,15 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.form != nil {
+		if msg == huh.NextField() && m.form.GetFocusedField().GetKey() == "submit" {
+			if cmd, invalid := m.validateForm(); invalid {
+				return m, cmd
+			}
+		}
+		if _, editing := msg.(tea.KeyPressMsg); editing && m.formError != nil {
+			m.formError = nil
+			m.form.WithHeight(m.formHeight())
+		}
 		beforeName, beforeDirectory, beforeSetup := "", "", ""
 		if m.create != nil && m.modal == ModalNewApplication {
 			beforeName, beforeDirectory = m.create.Name, m.create.DirectoryName
@@ -780,6 +791,7 @@ func (m *Model) applyTheme(theme Theme) {
 }
 
 func (m *Model) closeModal() {
+	m.formFields, m.formError = nil, nil
 	m.settingError = nil
 	m.displayedResult = nil
 	m.modalHasLog = false
@@ -874,6 +886,9 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 
 func (m Model) formHeight() int {
 	height := formContentHeight(m.height)
+	if m.formError != nil {
+		height -= 2
+	}
 	if m.modal == ModalSetting && m.settingError != nil {
 		height -= 2
 	}
