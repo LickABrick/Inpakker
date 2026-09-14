@@ -6,10 +6,6 @@ const (
 	RouteApplications RouteKind = iota
 	RouteApplication
 	RouteDiagnostics
-	RouteValidationResults
-	RouteBuildResults
-	RouteUnpackResults
-	RouteLogs
 	RouteWorkspaces
 	RouteSettings
 	RouteAbout
