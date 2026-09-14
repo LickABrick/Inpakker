@@ -1,109 +1,334 @@
 # AGENTS.md
 
-## Project overview
+## Purpose
 
-Inpakker is a small Go CLI and terminal UI for organizing and packaging Win32
-applications for Microsoft Intune. It wraps Microsoft's external
-`IntuneWinAppUtil.exe`; it does not implement the `.intunewin` packaging format
-itself.
+Inpakker is a Go CLI and terminal UI for organizing, validating, building and inspecting Microsoft Intune Win32 application packages.
 
-The Go module is `github.com/LickABrick/inpakker` and currently targets Go
-1.25.8. Cobra provides the CLI command structure. Bubble Tea, Bubbles, Huh, and
-Lip Gloss provide the interactive terminal UI, forms, progress, and
-terminal-aware presentation.
+It uses Microsoft's external `IntuneWinAppUtil.exe` for `.intunewin` packaging rather than implementing the package format itself.
+
+Keep changes focused, predictable and compatible with the existing architecture. Prefer extending existing services and UI patterns over introducing parallel implementations.
+
+Before making a non-trivial change, inspect the nearby implementation and tests first.
+
+Do not refactor unrelated code as part of a focused task.
+
+---
+
+## Sources of truth
+
+When documentation, assumptions or generated context disagree, use these sources:
+
+* `go.mod` owns the required Go version and dependencies.
+* `types/types.go` plus the config loaders and validators own persisted configuration contracts.
+* Existing implementation and tests describe current behavior.
+* `README.md` describes the released user-facing product at a high level.
+* `docs/` contains detailed user-facing behavior and configuration.
+* `CONTRIBUTING.md` owns contributor, branch and pull-request workflow.
+* `SECURITY.md` owns vulnerability reporting guidance.
+* `ROADMAP.md` describes future direction only.
+
+Do **not** implement roadmap features, placeholder fields or speculative architecture unless the task explicitly asks for them.
+
+When behavior changes intentionally, update implementation, tests and relevant documentation together.
+
+---
 
 ## Repository map
 
-- `main.go`: executable entry point; delegates to `cmd.Execute`.
-- `cmd/`: CLI commands, process exit behavior, and the TUI entry point. Keep
-  commands thin and call reusable internal services.
-- `cmd/output.go`: shared, terminal-aware command presentation.
-- `internal/config/`: Schema validation, typed settings, user home resolution and configuration I/O.
-- `internal/atomicfile/`: flushed atomic writes with Windows replacement support.
-- `internal/toolmanager/`: deterministic global tool detection and official upstream downloads.
-- `internal/pathopener/`: injectable shell-free Windows Explorer launch.
-- `internal/buildcache/`: versioned build cache and deterministic input
-  fingerprinting.
-- `internal/cliui/`: reusable interactive CLI progress rendering.
-- `internal/workspace/`: workspace discovery, inspection, validation, package
-  lookup, registry/resolver, effective application settings and application scaffolding.
-- `internal/packager/`: reusable `IntuneWinAppUtil.exe` orchestration.
-- `internal/unpacker/`: isolated external decoder execution and secure archive
-  extraction.
-- `internal/updater/`: daily GitHub release discovery, cached update state,
-  signed checksum verification, archive validation, and rollback-aware
-  executable replacement.
-- `internal/process/`: injectable external-process runner and bounded, concurrent
-  diagnostic output capture.
-- `internal/pathutil/`: cross-platform safe-relative-path validation.
-- `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
-  application, `navigation.go` and `keymap.go` define routes/input precedence,
-  `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs,
-  `form_validation.go` validates their inputs only on submission,
-  `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
-  `actions.go` owns contextual action menus,
-  `create_review.go` previews application creation,
-  `operations.go` runs cancellable services, `results.go` owns session-local result
-  snapshots and workspace-bound retry/folder actions, and `render.go` composes the shell
-  and pages using the centralized styles in `theme.go`.
-- `types/types.go`: JSON-backed user, workspace and application configuration types.
-- `README.md`: concise end-user installation, features, and common workflows.
-- `docs/`: detailed end-user configuration, TUI, and troubleshooting references.
-- `CONTRIBUTING.md` and `SECURITY.md`: public contribution and vulnerability
-  reporting guidance.
+* `main.go` — executable entry point.
+* `cmd/` — Cobra commands, CLI behavior and TUI entry point. Keep commands thin.
+* `cmd/output.go` — shared terminal-aware CLI output.
+* `types/` — shared persisted and effective data contracts.
+* `internal/config/` — configuration loading, validation, user-home resolution and typed edits.
+* `internal/workspace/` — workspace/application discovery, scaffolding, target resolution and effective settings.
+* `internal/buildcache/` — deterministic build fingerprints and local build state.
+* `internal/packager/` — `IntuneWinAppUtil.exe` orchestration.
+* `internal/unpacker/` — decoder execution and secure extraction.
+* `internal/toolmanager/` — external-tool detection, configuration and downloads.
+* `internal/process/` — injectable external-process execution.
+* `internal/pathutil/` — safe relative-path handling.
+* `internal/pathopener/` — injectable Explorer/folder opening.
+* `internal/updater/` — release discovery and self-update behavior.
+* `internal/tui/` — Bubble Tea application and TUI components.
+* `docs/` — detailed end-user documentation.
+* `.github/` and `.goreleaser.yaml` — CI/release automation.
 
-Tests cover configuration validation, target discovery, command summaries,
-incremental builds and read-only build-state inspection, usage errors,
-onboarding, TUI routing/input/responsive states, packaging failures, scaffold
-safety, decoder isolation, ZIP extraction safety, update caching, release
-discovery, and signed update verification. There is no checked-in example
-workspace. GitHub Actions runs Go tests on Linux and Windows and isolated PowerShell installer tests on Windows. GoReleaser
-publishes tagged releases.
+Place new code in the existing package that owns the behavior whenever practical.
 
-## Git workflow
+Do not create a new package/interface merely to avoid modifying an existing one.
 
-Use Conventional Commits for commit subjects:
+---
 
-```text
-<type>(optional-scope): <imperative summary>
+## Core product contracts
+
+### Workspaces and applications
+
+Workspace and application UUIDs are stable identities and must not depend on display names or filesystem locations.
+
+Portable workspace data includes workspace/application configuration and application source files.
+
+Machine-specific data belongs under the Inpakker user home, not inside portable workspace configuration.
+
+Removing a registered workspace must never delete the workspace files.
+
+Relinking a workspace must preserve and verify workspace identity.
+
+New workspaces may copy global defaults. Existing workspaces must not silently change when global defaults change.
+
+Nested application groups are supported.
+
+Use effective application settings consistently for:
+
+* validation;
+* build inputs;
+* fingerprints;
+* package lookup;
+* inspection;
+* TUI presentation.
+
+Path-setting changes must never silently move existing files.
+
+Preserve:
+
+* safe-relative-path validation;
+* Windows reserved-name handling;
+* symlink/path-containment protections.
+
+### Local versus portable state
+
+User-local state may include:
+
+* managed external tools;
+* preferences;
+* workspace registrations;
+* build cache;
+* update state;
+* future credentials/tokens.
+
+Portable workspace/application JSON must not contain:
+
+* machine-specific executable paths;
+* authentication tokens;
+* credentials;
+* secrets.
+
+Future tenant or Intune integration may reference workspace identity, but do not add unused Graph/Entra/authentication fields before that functionality exists.
+
+---
+
+## CLI contracts
+
+Commands should remain thin wrappers around reusable internal services.
+
+Product operations should have scriptable CLI equivalents where practical.
+
+JSON output must:
+
+* never prompt;
+* never animate;
+* never emit ANSI;
+* remain machine-readable.
+
+Interactive behavior must not activate when stdin/stdout is unsuitable for interaction.
+
+Where an operation supports interactive prompts, provide flags or non-interactive behavior suitable for automation.
+
+Invocation/argument errors may show command usage.
+
+Operational failures should remain concise and should not dump unrelated usage text.
+
+Return non-zero status for actual operation failures.
+
+Use `cmd/output.go` for shared CLI presentation instead of inventing command-specific styling.
+
+---
+
+## External tools and processes
+
+External-process execution must remain injectable/testable.
+
+Tests must not require a locally installed:
+
+* `IntuneWinAppUtil.exe`;
+* `IntuneWinAppUtilDecoder.exe`;
+* future optional Windows tooling.
+
+Do not treat unavailable Windows-only external tools on Linux CI as a product failure.
+
+Explicitly configured tool paths must not be silently replaced by automatic discovery.
+
+Tool downloads must use known upstream sources and remain explicit about required upstream license acceptance.
+
+Do not execute arbitrary shell strings when direct process execution is available.
+
+---
+
+## Build and unpack behavior
+
+Build cache is local machine state keyed by stable application identity.
+
+A normal build may skip an application only when:
+
+* its relevant inputs match the cached fingerprint; and
+* the expected output artifact still exists.
+
+`--force` rebuilds and may refresh cache state.
+
+`--no-cache` must not read or write build-cache state.
+
+Failed builds must not update successful cache records.
+
+Unpacking must keep decoder execution isolated and extraction path-safe.
+
+Terminology should remain consistent:
+
+* **source** = packaging inputs;
+* **output** = generated packages;
+* **destination** = extracted/unpacked files.
+
+Application install/uninstall commands are metadata and must not execute during normal packaging.
+
+Execution of those commands belongs only to an explicit future/test workflow such as Windows Sandbox testing.
+
+---
+
+## TUI contracts
+
+The TUI uses Bubble Tea/Bubbles/Huh/Lip Gloss.
+
+`View()` must remain render-only. Do not perform:
+
+* filesystem scans;
+* hashing;
+* process execution;
+* networking;
+* configuration writes
+
+from rendering code.
+
+Slow or external work must happen asynchronously through commands/services.
+
+Results from asynchronous workspace operations must be tied to the originating workspace/request so stale results cannot overwrite newer state.
+
+Long-running foreground operations must:
+
+* prevent conflicting operations;
+* support cancellation where practical;
+* remain locked until the worker acknowledges cancellation;
+* preserve completed/partial results where the existing workflow supports it.
+
+Forms should allow normal editing/navigation before final validation. On failed submission:
+
+* preserve entered values;
+* show a useful error;
+* focus or identify the invalid field.
+
+Backspace must continue editing a focused input before being interpreted as navigation.
+
+State must never rely on color alone.
+
+Use display-width-aware alignment and preserve accessible/plain branding behavior.
+
+### TUI UX direction
+
+Keep the interface approachable with arrow keys and Enter.
+
+Optional expert shortcuts may supplement, but never replace, normal navigation.
+
+Prefer consistent conventions:
+
+* `/` — filter/search the current list;
+* `Enter` — primary/open action;
+* `Esc` — cancel, clear or go back according to current context;
+* `a` — contextual actions where applicable;
+* `?` — contextual help;
+* `:` — global command palette when implemented.
+
+Do not hide an active filter.
+
+Footer help, full help and actual key handling should use the same binding definitions rather than duplicating key meanings.
+
+Prefer responsive list/detail or preview layouts where they improve usability, but preserve narrow-terminal operation.
+
+Do not introduce Neovim-style modal editing, leader-key systems or required Vim knowledge.
+
+---
+
+## Configuration changes
+
+Persisted configuration uses explicit schema versions.
+
+Unsupported schema versions must fail clearly.
+
+Configuration writes must remain atomic.
+
+When changing a persisted contract:
+
+1. update the canonical type;
+2. update loading/validation;
+3. update scaffolding/serialization;
+4. update tests;
+5. update relevant documentation.
+
+Do not add migration or compatibility behavior unless the task explicitly requires it.
+
+Do not add unused fields for future roadmap functionality.
+
+---
+
+## Error handling and implementation style
+
+Wrap errors with useful operation/path context and preserve the underlying cause with `%w` when callers may inspect it.
+
+Avoid new global mutable state when values can be scoped to a command, service or model.
+
+Prefer the Go standard library unless a dependency clearly improves the implementation.
+
+If dependencies intentionally change:
+
+```sh
+go mod tidy
 ```
 
-Common types are `feat`, `fix`, `docs`, `test`, `refactor`, `build`, `ci`,
-`chore`, `perf`, and `revert`. Use `!` and/or a `BREAKING CHANGE:` footer when a
-change breaks compatibility. Keep commits focused, and do not combine unrelated
-cleanup with a functional change.
+and commit the corresponding `go.mod` and `go.sum` changes.
 
-Development follows version branches rather than merging feature work directly
-into `master`:
+Do not hand-edit dependency checksums or generated artifacts.
 
-- `master` represents released, production-ready code.
-- The active development line is `release/v0.5`; dependency updates target it.
-- Create a `release/vX.Y` branch for the next planned minor or major release.
-  Patch-only release branches may use `release/vX.Y.Z` when they must be prepared
-  independently of the next release line.
-- Create short-lived branches such as `feature/<short-name>`,
-  `fix/<short-name>`, `docs/<short-name>`, or `chore/<short-name>` from the
-  applicable version branch.
-- Open pull requests from short-lived branches into that version branch. Do not
-  merge incomplete work merely to share it; use draft pull requests where
-  appropriate.
-- When the version branch is complete and verified, open a release pull request
-  from it into `master`. The release PR is the point for reviewing the complete
-  release notes, version, compatibility impact, and generated artifacts.
-- Delete short-lived branches after merging. Delete version branches after the
-  release unless they are intentionally retained for maintenance.
-- Urgent production fixes should branch from `master`, target an appropriate
-  patch release branch, and be carried forward into any active later version
-  branch when applicable.
+Keep user-facing wording concise and consistent.
 
-Pull requests should explain the user-visible or technical outcome, identify
-breaking changes and config migrations, and state which checks were run. Update
-tests and user documentation in the same PR as the behavior they cover. A PR
-should not be merged with failing required checks.
+---
 
-## Development workflow
+## Security and safety
 
-Run these checks after changing Go code:
+Never commit:
+
+* credentials or tokens;
+* private signing keys;
+* generated `.intunewin` files;
+* decoded package contents;
+* local test workspaces;
+* build caches;
+* locally built release binaries/archives.
+
+Tests must use temporary locations and must not modify real:
+
+* user configuration;
+* workspace registrations;
+* managed tools;
+* PATH;
+* Inpakker installations.
+
+Treat external package/application metadata as untrusted input.
+
+Validate filesystem paths before writing or extracting data.
+
+Avoid writable exposure of real workspace directories to isolated test environments when a read-only mapping or temporary copy is sufficient.
+
+---
+
+## Development checks
+
+After changing Go code, run:
 
 ```sh
 gofmt -w <changed-go-files>
@@ -112,218 +337,114 @@ go vet ./...
 go build ./...
 ```
 
-Use `go test ./...` even while there are no explicit test files: it compiles all
-packages. Add focused unit tests for new parsing, validation, discovery, or path
-logic. Keep tests independent of installed `IntuneWinAppUtil.exe` and
-`IntuneWinAppUtilDecoder.exe` binaries; inject or isolate process execution.
+Add focused tests for changed behavior.
 
-Installer/uninstaller tests run with `powershell -File tests/installer.ps1` on
-Windows using temporary directories. Never test against a real user installation
-or PATH. `install.ps1` embeds the same public signing certificate as the updater;
-update both together if release trust changes. No private signing material belongs
-in this repository. The uninstaller must preserve workspaces even with `-Purge`.
+Prefer table-driven tests for deterministic parsing, validation and decision logic.
 
-The packaging and unpacking integrations can only be exercised where their
-configured Windows executables are available. Do not treat inability to run
-those external executables on Linux as a product failure. Do not commit
-generated Windows executables, `.intunewin` packages, decoded contents,
-build caches, coverage output, or local test workspaces. A locally built
-extensionless Unix binary is not currently ignored, so take care not to stage
-one.
+Use injectable runners/services for external processes and network-dependent behavior.
 
-If the local Go toolchain itself is unavailable or broken, report that
-separately and do not claim the checks passed.
+If a required check cannot run because the local environment/toolchain is unavailable, state that clearly. Do not claim it passed.
 
-## Releases and artifacts
+Windows installer/uninstaller behavior has dedicated tests; do not test installer changes against a real user installation.
 
-Use Semantic Versioning (`MAJOR.MINOR.PATCH`):
+---
 
-- before v1.0.0, a MINOR release may intentionally contain breaking CLI, configuration or workspace changes;
-- after v1.0.0, incompatible public behavior requires a MAJOR increment;
-- increment `MINOR` for backward-compatible functionality;
-- increment `PATCH` for backward-compatible fixes.
+## Git and pull requests
 
-Release versions are identified by annotated Git tags named `vX.Y.Z`. A tag
-must point to the release commit on `master`; do not release arbitrary feature
-or version-branch commits.
+Follow `CONTRIBUTING.md` for branch naming, release branches, Conventional Commits and pull-request workflow.
 
-The release workflow is implemented by `.github/workflows/release.yml` and
-`.goreleaser.yaml`. Pushing a valid release tag runs formatting, tests, vetting,
-and compilation before GoReleaser builds the supported binaries, creates
-checksums, and publishes them to the matching GitHub Release. Release jobs must
-fail instead of publishing a partial set when a required build or check fails.
-Tags not matching `vX.Y.Z` (with optional SemVer prerelease/build metadata), or
-whose commits are not contained in `master`, are rejected.
+Do not hard-code the current active release branch into this file. Inspect the repository/CONTRIBUTING guidance when branch selection matters.
 
-Release artifacts have stable, machine-readable names that include the project,
-version, operating system, and architecture, for example
-`inpakker_v1.2.3_windows_amd64.zip`. The supported release target is currently
-Windows AMD64. Publish a checksum manifest, its detached ECDSA signature, and a
-GitHub provenance attestation alongside the archives. The signing certificate
-in `internal/updater/release-signing-cert.pem` is public; its matching private
-key must exist only in secure maintainer storage and the encrypted
-`INPAKKER_RELEASE_SIGNING_KEY` GitHub Actions secret. Do not commit release
-binaries, archives, signatures, or private keys to the repository.
+Keep commits focused.
 
-Tags and GitHub Releases are the update source of truth; avoid mutable version
-labels such as `latest` inside filenames. The updater accepts stable releases
-only and must require the versioned Windows archive, checksum manifest, and
-trusted manifest signature before installation. The CLI exposes the embedded
-release version through `inpakker --version`; development builds report `dev`
-and may not replace themselves.
+Pull requests should explain:
 
-## CLI behavior and workspace model
+* the user-visible or technical outcome;
+* compatibility/configuration impact;
+* tests/checks run.
 
-Inpakker is installed once per user under `%LOCALAPPDATA%\Programs\Inpakker`.
-User settings, managed tools, build state and update cache live under
-`%LOCALAPPDATA%\Inpakker`; `INPAKKER_HOME` overrides this for development/tests.
-Portable workspaces contain `inpakker.workspace.json`, an applications directory,
-and `inpakker.app.json` beneath each application root. v0.4 deliberately replaces
-the v0.3 formats; no compatibility aliases or automatic migrations are retained.
+Update tests and relevant user documentation in the same change as user-visible behavior.
 
-- Every workspace-dependent entry point uses the central resolver: explicit
-  `--workspace`, `INPAKKER_WORKSPACE`, current/parent discovery, active registration,
-  then no workspace. Discovered workspaces are never silently registered.
-- Workspace/application UUIDs are generated internally and stable across location
-  or display-name changes. Registrations contain UUID, path and last-opened time;
-  portable workspace JSON owns the authoritative name. Names may contain spaces.
-- `workspace create/add/use/show/list/remove/relink` manage registration and
-  activation. Remove never deletes workspace files. Relink requires the same UUID.
-  New workspaces copy global directory defaults; existing ones do not inherit
-  subsequent global default changes.
-- Discovery supports nested groups, stops at application roots and skips `.git`.
-  CLI targets match canonical relative paths, unique human names, then groups.
-  Ambiguous human names list canonical targets; there is no CLI fuzzy matching.
-- `config.EffectiveApp` resolves source/output inheritance. Validation, build,
-  fingerprints, package lookup, inspection and the TUI consume effective values.
-  Path settings never move files automatically. Preserve safe relative paths,
-  Windows reserved-name validation and symlink containment checks.
-- `new` generates a directory slug until manually overridden and never overwrites
-  an application directory. `--setup-from` copies one selected installer into the
-  new source directory.
-  Rollback removes only that copied file and newly created empty directories.
-- Cache state lives in `state/workspaces/<UUID>/build-cache.json` under Inpakker
-  home, keyed by application UUID. Build skips only matching inputs with existing
-  artifacts. Rebuild (`--force`) updates cache; `--no-cache` neither reads nor
-  writes cache. Failed builds do not update records.
-- Tools are global. Detection uses configured path, PATH, managed tools, cwd,
-  executable directory, then workspace root without recursive user-directory scans.
-  Explicit configured paths are not silently replaced. Downloads require upstream
-  license acceptance, official sources, cancellation, response/executable validation
-  and atomic installation. Test downloads with local HTTP servers.
-- `unpack` isolates decoder execution and securely extracts decoded ZIP output.
-  Source directory means packaging inputs, output directory means generated
-  packages, destination directory means extracted files. Install/uninstall commands
-  are metadata only and must never execute during packaging.
-- With no arguments, interactive invocation starts the TUI; redirected invocation
-  prints help. No-workspace startup offers workspace creation/addition. Workspace
-  management must work without configured external tools.
-- TUI `View()` renders only memory: no scans, hashing, processes, networking or
-  writes. Inventory is asynchronous and every result has workspace UUID and request
-  generation. Workspace changes discard old inventory and reject stale results.
-- Refresh, tool detection and update checks stay interactive; foreground packaging,
-  unpacking and installation block conflicting operations and support cancellation.
-  Operation results and build tool output remain in scrollable dialogs over the
-  originating page; only explicit application navigation opens a result's app page.
-  Cancellation retains the operation lock until the worker acknowledges completion
-  and preserves partial results. Retry retains original options and target identity;
-  result snapshots never authorize actions in a different workspace.
-- TUI text fields allow empty/invalid values during navigation. Validate on the
-  final submit action, preserve the draft, and focus the first invalid field.
-  Submit controls use Huh confirmation buttons, not informational note cards.
-- Input priority is window events, active operation, modal/form/input, page, global.
-  Backspace edits focused inputs before navigation. Read scalar form submissions
-  from Huh result keys, not pointers into copied Bubble Tea model values.
-- `w` opens Workspaces, `s` Settings, `i` About and contextual `o` opens folders.
-  About owns version/update information. Branding is decorative 📦 INPAKKER with
-  a plain accessible fallback. Use display-width-aware terminal alignment.
-- CLI `open` and TUI folder actions share an injectable path opener. Invoke Explorer
-  directly with one path argument and return without waiting for it to close.
-- Product operations have scriptable CLI equivalents; informational navigation
-  such as About does not require duplicate CLI commands. TUI excludes application
-  delete/rename and raw JSON editing, but supports constrained typed settings.
-- JSON output must not prompt, animate or emit ANSI. Application failures produce
-  concise detail lines and a count summary with nonzero status. Invocation/flag
-  failures show usage; operational errors do not.
-- Update checks share the user-local daily cache. Automatic failures are silent
-  and do not affect command success. `INPAKKER_NO_UPDATE_CHECK=1` disables automatic
-  checks. Explicit checks still work. Installation requires fresh metadata, a
-  trusted signature and SHA-256 verification. Development builds cannot update.
+Do not merge with failing required checks.
 
-## Configuration contracts
+---
 
-Canonical types live in `types/types.go`: `UserConfig`, `ToolConfig`,
-`Preferences`, `WorkspaceDefaults`, `WorkspaceRegistration`, `WorkspaceConfig`,
-`AppConfig` and `EffectiveAppConfig`. User/workspace/app/cache files use
-`schemaVersion: 1`. Unsupported schemas fail clearly. Configuration writes are
-atomic. Tool paths/preferences never belong in portable workspace JSON.
+## Releases and updater
 
-Global typed edits use known preference/default keys; workspace edits use name
-and directory keys. CLI `--workspace-settings` selects config scope without
-colliding with the global `--workspace <name-or-path>` selector. Update types,
-loaders, scaffolding, tests and docs together when contracts change.
+Release/update/signing changes are security-sensitive.
 
-Future Intune integration can attach to workspace identity. Do not add unused
-placeholder fields, Graph/Entra login or token storage. Credentials/tokens belong
-in protected user-local storage, never portable JSON.
+Before modifying release or updater behavior, inspect:
 
-## Implementation conventions
+* `.github/workflows/release.yml`;
+* `.goreleaser.yaml`;
+* `internal/updater/`;
+* installer/update signing code;
+* relevant release tests.
 
-- Keep command definitions in `cmd/` and configuration I/O in
-  `internal/config/`; shared data contracts belong in `types/`.
-- Return errors from Cobra `RunE` handlers for command-level failures. Continue
-  processing other apps only for failures intentionally scoped to one target.
-- Wrap errors with useful operation and path context while preserving the cause
-  with `%w` when callers may inspect it.
-- Avoid adding global mutable command state when a value can be scoped to a
-  command or passed to a helper. Existing package globals are not a requirement
-  for new code.
-- Keep user output concise and consistent with the existing info, warning,
-  failure, and summary messages. Use the shared console in `cmd/output.go`.
-  Lip Gloss styling must degrade cleanly for redirected/non-interactive output;
-  never emit unconditional ANSI sequences. Use `✓`, `!`, `X`, `-`, `•`, `○`, and `—` for status markers. The box emoji is decorative branding only.
-- Invocation and flag errors must include command usage. Operational errors
-  must remain concise and must not dump usage. Interactive prompts require a
-  terminal and must have flag-based, `--no-input` alternatives. JSON output
-  must never prompt or animate. Use Huh for forms and the shared CLI progress
-  model for long, measurable work.
-- Use standard-library functionality unless a dependency provides a clear
-  benefit. Run `go mod tidy` after intentionally changing dependencies and
-  include both `go.mod` and `go.sum` changes.
-- Do not hand-edit generated artifacts or dependency checksums.
+Do not weaken checksum/signature verification or publish partial release artifacts.
 
-## Documentation expectations
+Never commit private signing material.
 
-Update `README.md` whenever user-visible commands, flags, defaults, workspace
-layout, supported config keys, or platform requirements change. Examples should
-be runnable and should use Windows syntax where they demonstrate the external
-Intune utility, while ordinary Go development commands may remain portable.
+Release implementation details belong in the release automation and development documentation rather than being duplicated extensively here.
 
-Keep this file descriptive of the repository's actual workflow. If new tests,
-CI, release tooling, or architectural layers are added, revise the relevant
-sections rather than leaving stale instructions.
+---
 
-Keep the README focused on released end-user behavior. Put full configuration
-and troubleshooting material under `docs/`; put development and release details
-in `CONTRIBUTING.md` or this file. Do not expose dependency versions or internal
-implementation details in the README unless an end user must act on them.
-When the active version branch changes, update Dependabot's `target-branch` in
-the same pull request so dependency updates continue to follow this workflow.
+## Documentation
+
+Keep `README.md` as the friendly project landing page:
+
+* what Inpakker is;
+* key features;
+* quick install;
+* basic workflow;
+* links to deeper documentation.
+
+Avoid filling README with implementation/security internals unless a user must act on them.
+
+Use:
+
+* `docs/tui.md` for detailed TUI usage;
+* `docs/configuration.md` for configuration/workspace behavior;
+* `docs/troubleshooting.md` for troubleshooting;
+* `ROADMAP.md` for future planned/exploratory functionality;
+* `CONTRIBUTING.md` for development workflow.
+
+Roadmap text is not released behavior.
+
+When implementing a roadmap feature, update the roadmap and user documentation to reflect its actual state.
+
+---
+
+## Agent behavior
+
+For non-trivial work:
+
+1. inspect the relevant implementation and nearby tests;
+2. identify the existing owning package/service;
+3. preserve established contracts unless the task intentionally changes them;
+4. implement the smallest coherent change;
+5. add/update tests;
+6. update relevant documentation;
+7. run the applicable checks.
+
+Do not:
+
+* invent requirements not present in the task or repository;
+* implement adjacent roadmap items “while here”;
+* add speculative compatibility layers;
+* perform unrelated cleanup;
+* duplicate an existing service or source of truth;
+* claim unsupported behavior has been tested.
+
+If an existing pattern is clearly problematic, improve it only when that improvement is required for the requested change or is small and directly related.
+
+---
 
 ## Maintaining this file
 
-Update `AGENTS.md` in the same pull request whenever a change affects how
-contributors or agents should work, including changes to:
+Keep `AGENTS.md` focused on durable repository-wide rules.
 
-- repository structure, package ownership, or architectural boundaries;
-- required local commands, tests, linters, CI checks, or supported toolchains;
-- branch names, merge targets, commit conventions, or pull-request policy;
-- release versioning, tagging, automation, supported build targets, or artifact
-  naming;
-- configuration compatibility rules, generated files, or documentation duties.
+Do not add transient release numbers, dependency versions, implementation trivia or detailed feature documentation that can be read from the actual source of truth.
 
-Do not update this file for an isolated implementation detail that does not
-change the repository workflow or an enduring convention. Instructions should
-describe the current state or clearly label an intended workflow that has not
-yet been implemented. Remove obsolete guidance as part of the change that makes
-it obsolete.
+When a rule only applies to one subsystem and becomes substantial, prefer a scoped `AGENTS.md` in that subtree or dedicated development documentation instead of expanding this root file indefinitely.
+
