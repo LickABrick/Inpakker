@@ -38,13 +38,13 @@ The next features build on this workflow instead of replacing it.
 
 # 🎨 1. TUI & UX modernization
 
-**Status: Next**
+**Status: Implemented — v0.6.0**
 
-Before adding larger workflows, the terminal interface should be ready to scale with them.
+The terminal interface now provides reusable foundations for larger workflows.
 
 The goal is to keep Inpakker easy for someone using arrow keys and Enter while making it very fast for experienced terminal users.
 
-Planned improvements include:
+Implemented improvements include:
 
 * Context-aware shortcuts and help
 * Consistent `/` filtering throughout the TUI
@@ -54,12 +54,14 @@ Planned improvements include:
 * Cleaner Settings layout
 * Better diagnostics detail views
 * Contextual action menus
-* Optional `j/k/h/l` navigation
+* Optional `j/k` list navigation alongside arrow keys
 * Cleaner background activity indicators
 * More consistent loading, empty and error states
 * Better responsive layouts for different terminal sizes
 
-Inspiration comes from applications such as LazyGit, k9s, Yazi, Zellij and Telescope — without turning Inpakker into a Vim clone.
+See [the TUI guide](docs/tui.md) for the implemented workflows. Palette searches
+remain synchronous because the in-memory command inventory is small. Optional
+`h/l` aliases and a background-task detail view are not needed for these workflows.
 
 ---
 
