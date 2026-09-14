@@ -127,7 +127,8 @@ workspace without switching. `r` refreshes in the background.
 
 Creation uses one form with inherited source/output settings and an optional
 group path with suggestions for existing groups. Forms use arrows, Tab and
-Shift+Tab; Esc cancels. F2 browses workspace/tool paths or selects an installer
+Shift+Tab; Esc cancels. Empty fields can be skipped; validation happens when
+you confirm the form and keeps your entries if corrections are needed. F2 browses workspace/tool paths or selects an installer
 to copy during application creation. A scrollable review shows the application,
 source, setup and output paths before creation; Esc returns to editing. Manual
 path entry remains available. Backspace edits a focused input before navigating back.

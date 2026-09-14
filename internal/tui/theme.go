@@ -109,7 +109,7 @@ func (t Theme) HelpStyles() help.Styles {
 func (t Theme) HuhTheme() huh.Theme {
 	return huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeBase(isDark)
-		styles.Focused.Base = styles.Focused.Base.BorderForeground(t.FocusedBorderColor)
+		styles.Focused.Base = styles.Focused.Base.BorderForeground(t.FocusedBorderColor).Background(t.SurfaceColor).Foreground(t.TextColor)
 		styles.Focused.Card = styles.Focused.Base
 		styles.Focused.Title = styles.Focused.Title.Foreground(t.BrandColor).Bold(true)
 		styles.Focused.NoteTitle = styles.Focused.NoteTitle.Foreground(t.BrandColor).Bold(true)
@@ -130,6 +130,7 @@ func (t Theme) HuhTheme() huh.Theme {
 		styles.Blurred.Base = styles.Blurred.Base.BorderStyle(lipgloss.HiddenBorder())
 		styles.Blurred.Card = styles.Blurred.Base
 		styles.Blurred.Next = styles.Blurred.BlurredButton
+		styles.Blurred.FocusedButton = styles.Blurred.BlurredButton.Foreground(t.AccentColor).Bold(true)
 		styles.Blurred.Title = styles.Blurred.Title.Foreground(t.MutedColor)
 		styles.Group.Title = lipgloss.NewStyle().Foreground(t.BrandColor).Bold(true)
 		styles.Group.Description = lipgloss.NewStyle().Foreground(t.MutedColor)

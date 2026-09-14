@@ -324,6 +324,9 @@ func (m Model) modalView() string {
 	case ModalNewApplication, ModalWorkspaceForm, ModalBuildOptions, ModalPackageSelect, ModalUpdate, ModalSetting, ModalTool:
 		if m.form != nil {
 			body = m.form.View()
+			if m.formError != nil {
+				body = m.theme.StatusError.Render(ansi.Truncate("X "+m.formError.Error(), modalInnerWidth(m.width), "…")) + "\n\n" + body
+			}
 			if m.modal == ModalSetting && m.settingError != nil {
 				body = m.theme.StatusError.Render(ansi.Truncate("X Could not save: "+m.settingError.Error(), modalInnerWidth(m.width), "…")) + "\n\n" + body
 			}
