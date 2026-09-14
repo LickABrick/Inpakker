@@ -67,8 +67,12 @@ source folder. Existing application directories are never overwritten.
 ## Forms and settings
 
 Up/down and Tab/Shift+Tab navigate text fields; left/right move the cursor and
-Backspace deletes. Select controls use arrows to choose an option and Enter to
-advance. Global shortcuts do not trigger while typing. Workspace/tool path
+Backspace deletes. Empty or invalid text fields do not block navigation.
+Validation runs only when you confirm the final Save, Create or Review action.
+An error returns focus to the first field needing attention and preserves the
+rest of the form; you can still move freely between fields afterward. Submit
+actions use the same button style as update confirmations.
+Select controls use arrows to choose an option and Enter to advance. Global shortcuts do not trigger while typing. Workspace/tool path
 forms and application setup selection offer F2 browsing with right-arrow directory
 navigation and Enter selection;
 manual paths remain available.

@@ -39,6 +39,7 @@ terminal-aware presentation.
 - `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
   application, `navigation.go` and `keymap.go` define routes/input precedence,
   `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs,
+  `form_validation.go` validates their inputs only on submission,
   `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
   `actions.go` owns contextual action menus,
   `create_review.go` previews application creation,
@@ -227,6 +228,9 @@ the v0.3 formats; no compatibility aliases or automatic migrations are retained.
   Cancellation retains the operation lock until the worker acknowledges completion
   and preserves partial results. Retry retains original options and target identity;
   result snapshots never authorize actions in a different workspace.
+- TUI text fields allow empty/invalid values during navigation. Validate on the
+  final submit action, preserve the draft, and focus the first invalid field.
+  Submit controls use Huh confirmation buttons, not informational note cards.
 - Input priority is window events, active operation, modal/form/input, page, global.
   Backspace edits focused inputs before navigation. Read scalar form submissions
   from Huh result keys, not pointers into copied Bubble Tea model values.
