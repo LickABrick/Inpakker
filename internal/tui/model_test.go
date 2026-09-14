@@ -274,8 +274,8 @@ func TestInvalidBuildAndUnavailableUnpackExplainWhy(t *testing.T) {
 	model.apps.filtered[0] = model.apps.all[0]
 	updated, _ = model.Update(press("u"))
 	model = updated.(Model)
-	if model.modal != ModalMessage || !strings.Contains(model.modalBody, "not configured") {
-		t.Fatalf("unpack unavailable message = %q", model.modalBody)
+	if model.modal != ModalTool || model.toolID != "decoder" || model.toolAction != "actions" {
+		t.Fatalf("unpack did not offer decoder setup: modal=%v tool=%q", model.modal, model.toolID)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestCtrlCCancelsOperationWithoutQuitting(t *testing.T) {
 	op := model.startOperation(operationValidate, "Validating", 1)
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
-	if cmd != nil || model.operation != nil || model.modal != ModalMessage {
+	if cmd != nil || model.operation == nil || !model.operation.cancelling || model.modal != ModalProgress {
 		t.Fatalf("cancel result: cmd=%v operation=%v modal=%v", cmd != nil, model.operation != nil, model.modal)
 	}
 	if op.context.Err() == nil {
@@ -366,7 +366,7 @@ func TestBatchValidationOpensInspectableResults(t *testing.T) {
 		issues: []validationIssue{{AppID: app.App.Ref.Relative, Name: app.App.Label(), Issue: "setup file does not exist"}},
 	})
 	model = updated.(Model)
-	if model.currentRoute().Kind != RouteValidationResults || len(model.resultRows) != 1 || model.resultRows[0].AppID == "" {
+	if model.currentRoute().Kind != RouteApplications || model.modal != ModalResults || len(model.resultRows) != 1 || model.resultRows[0].AppID == "" {
 		t.Fatalf("validation results: route=%v rows=%#v", model.currentRoute().Kind, model.resultRows)
 	}
 }

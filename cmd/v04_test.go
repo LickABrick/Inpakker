@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"github.com/LickABrick/inpakker/internal/pathopener"
 	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -23,7 +24,7 @@ func TestOpenWorkspaceAndHumanApplicationName(t *testing.T) {
 	for _, test := range []struct {
 		args []string
 		want string
-	}{{nil, ws.Root}, {[]string{"Mozilla Firefox"}, app.Path}, {[]string{app.Relative}, app.Path}} {
+	}{{nil, ws.Root}, {[]string{"Mozilla Firefox"}, app.Path}, {[]string{app.Relative}, app.Path}, {[]string{"Mozilla Firefox", "--output"}, filepath.Join(app.Path, "output")}} {
 		opened := ""
 		root := &cobra.Command{Use: "inpakker"}
 		root.PersistentFlags().String("workspace", "ADS Groep", "")
@@ -37,5 +38,18 @@ func TestOpenWorkspaceAndHumanApplicationName(t *testing.T) {
 		if opened != test.want {
 			t.Fatal(opened, test.want)
 		}
+	}
+}
+
+func TestOpenOutputRequiresApplication(t *testing.T) {
+	called := false
+	command := newOpenCmd(pathopener.Func(func(string) error { called = true; return nil }))
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	command.SetArgs([]string{"--output"})
+	err := command.Execute()
+	var usage usageError
+	if !errors.As(err, &usage) || called {
+		t.Fatal("missing application was not rejected as usage error", err)
 	}
 }

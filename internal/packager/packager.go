@@ -65,6 +65,9 @@ type BuildOptions struct {
 	Force      bool
 	NoCache    bool
 	OnProgress func(Event)
+	// Diagnostics receives output even when ShowToolOutput is disabled.
+	// Callers should use a bounded, concurrency-safe writer.
+	Diagnostics io.Writer
 }
 
 func (s Service) Validate() error {
@@ -141,6 +144,10 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		if s.Workspace.User.Preferences.ShowToolOutput {
 			processOut, processErr = stdout, stderr
 		}
+		if options.Diagnostics != nil {
+			processOut = diagnosticWriter(options.Diagnostics, processOut)
+			processErr = diagnosticWriter(options.Diagnostics, processErr)
+		}
 		err = s.Runner.Run(ctx, s.utilityPath(), []string{
 			"-c", filepath.Join(ref.Path, pathutil.Native(app.Effective.SourceDirectory)),
 			"-s", app.Config.SetupFile,
@@ -150,6 +157,9 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		if err != nil {
 			result.Status, result.Err = StatusFailed, fmt.Errorf("package application: %w", err)
 			results = append(results, result)
+			if ctx.Err() != nil {
+				return results, ctx.Err()
+			}
 			continue
 		}
 		artifacts, err := s.Workspace.Packages(ref, app.Config)
@@ -175,6 +185,13 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		}
 	}
 	return results, nil
+}
+
+func diagnosticWriter(diagnostics, visible io.Writer) io.Writer {
+	if visible == nil {
+		return diagnostics
+	}
+	return io.MultiWriter(diagnostics, visible)
 }
 
 // InspectBuildState calculates the same fingerprint and cache state used by a

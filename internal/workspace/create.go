@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,8 @@ type CreateOptions struct {
 	Group           string
 	SourceDirectory string
 	SetupFile       string
+	// SetupFrom optionally copies one existing installer into the new source directory.
+	SetupFrom       string
 	OutputDirectory string
 }
 
@@ -40,6 +43,9 @@ func Slug(name string) string {
 }
 
 func (w *Workspace) Create(options CreateOptions) (AppRef, error) {
+	if options.SetupFrom != "" && options.SetupFile == "" {
+		options.SetupFile = filepath.Base(options.SetupFrom)
+	}
 	if strings.TrimSpace(options.Name) == "" {
 		return AppRef{}, errors.New("application name is required")
 	}
@@ -73,8 +79,31 @@ func (w *Workspace) Create(options CreateOptions) (AppRef, error) {
 	if _, err := os.Lstat(appDir); !errors.Is(err, os.ErrNotExist) {
 		return AppRef{}, fmt.Errorf("application directory already exists or is inaccessible: %s", appDir)
 	}
+	var installer *os.File
+	if options.SetupFrom != "" {
+		info, err := os.Stat(options.SetupFrom)
+		if err != nil {
+			return AppRef{}, fmt.Errorf("inspect setup file %q: %w", options.SetupFrom, err)
+		}
+		if !info.Mode().IsRegular() {
+			return AppRef{}, errors.New("setup source must be a regular file")
+		}
+		installer, err = os.Open(options.SetupFrom)
+		if err != nil {
+			return AppRef{}, fmt.Errorf("open setup file %q: %w", options.SetupFrom, err)
+		}
+		defer installer.Close()
+		info, err = installer.Stat()
+		if err != nil {
+			return AppRef{}, fmt.Errorf("inspect setup file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return AppRef{}, errors.New("setup source must be a regular file")
+		}
+	}
 	// Track only directories created by this request; rollback removes empty directories only.
 	var created []string
+	var copied string
 	mkdir := func(target string) error {
 		var missing []string
 		for p := target; ; p = filepath.Dir(p) {
@@ -96,6 +125,9 @@ func (w *Workspace) Create(options CreateOptions) (AppRef, error) {
 	success := false
 	defer func() {
 		if !success {
+			if copied != "" {
+				_ = os.Remove(copied)
+			}
 			for i := len(created) - 1; i >= 0; i-- {
 				_ = os.Remove(created[i])
 			}
@@ -103,6 +135,33 @@ func (w *Workspace) Create(options CreateOptions) (AppRef, error) {
 	}()
 	if err := mkdir(filepath.Join(appDir, pathutil.Native(effective.SourceDirectory))); err != nil {
 		return AppRef{}, err
+	}
+	if installer != nil {
+		destination := filepath.Join(appDir, pathutil.Native(effective.SourceDirectory), pathutil.Native(options.SetupFile))
+		if strings.EqualFold(destination, filepath.Join(appDir, AppConfigFile)) {
+			return AppRef{}, errors.New("setup file must not replace the application configuration")
+		}
+		if err := pathutil.Within(appDir, destination); err != nil {
+			return AppRef{}, err
+		}
+		if err := mkdir(filepath.Dir(destination)); err != nil {
+			return AppRef{}, err
+		}
+		output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			return AppRef{}, fmt.Errorf("create setup copy: %w", err)
+		}
+		copied = destination
+		_, err = io.Copy(output, installer)
+		if err == nil {
+			err = output.Sync()
+		}
+		if closeErr := output.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return AppRef{}, fmt.Errorf("copy setup file: %w", err)
+		}
 	}
 	if err := config.SaveApp(filepath.Join(appDir, AppConfigFile), &cfg); err != nil {
 		return AppRef{}, err

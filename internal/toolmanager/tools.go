@@ -63,6 +63,20 @@ type Service struct {
 	LookPath            func(string) (string, error)
 	APIBase             string // Injectable HTTP endpoint for tests; production uses api.github.com.
 	RawBase             string
+	OnProgress          func(Event)
+}
+
+// Event reports installation stages and executable download bytes. TotalBytes
+// is zero when the upstream response does not declare its size.
+type Event struct {
+	Phase             string
+	Bytes, TotalBytes int64
+}
+
+func (s Service) report(phase string, received, total int64) {
+	if s.OnProgress != nil {
+		s.OnProgress(Event{phase, received, max(0, total)})
+	}
 }
 
 func valid(path string) bool {
@@ -184,6 +198,7 @@ func (s Service) Install(ctx context.Context, id string, acceptLicense bool) (ty
 		raw = "https://raw.githubusercontent.com"
 	}
 	// Pin a commit before downloading so provenance cannot refer to a moving branch.
+	s.report("resolving source", 0, 0)
 	metadata, err := s.download(ctx, api+"/repos/"+d.Repository+"/commits?path="+d.Path+"&per_page=1", 2<<20)
 	if err != nil {
 		return types.ToolConfig{}, err
@@ -199,8 +214,12 @@ func (s Service) Install(ctx context.Context, id string, acceptLicense bool) (ty
 	}
 	commit := commits[0].SHA
 	url := raw + "/" + d.Repository + "/" + commit + "/" + d.Path
-	data, err := s.download(ctx, url, 100<<20)
+	data, err := s.downloadExecutable(ctx, url, 100<<20)
 	if err != nil {
+		return types.ToolConfig{}, err
+	}
+	s.report("verifying", int64(len(data)), int64(len(data)))
+	if err := ctx.Err(); err != nil {
 		return types.ToolConfig{}, err
 	}
 	if err := validateExecutable(data); err != nil {
@@ -214,6 +233,10 @@ func (s Service) Install(ctx context.Context, id string, acceptLicense bool) (ty
 		return types.ToolConfig{}, err
 	}
 	path := filepath.Join(home, "tools", id, commit, d.Filename)
+	s.report("installing", int64(len(data)), int64(len(data)))
+	if err := ctx.Err(); err != nil {
+		return types.ToolConfig{}, err
+	}
 	if err := atomicfile.Write(path, data, 0700); err != nil {
 		return types.ToolConfig{}, err
 	}
@@ -222,6 +245,7 @@ func (s Service) Install(ctx context.Context, id string, acceptLicense bool) (ty
 	if err := config.UpdateUser(func(user *types.UserConfig) error { *Tool(user, id) = result; return nil }); err != nil {
 		return types.ToolConfig{}, err
 	}
+	s.report("installed", int64(len(data)), int64(len(data)))
 	return result, nil
 }
 func validateExecutable(data []byte) error {
@@ -244,6 +268,14 @@ func validateExecutable(data []byte) error {
 	return nil
 }
 func (s Service) download(ctx context.Context, url string, limit int64) ([]byte, error) {
+	return s.readDownload(ctx, url, limit, false)
+}
+
+func (s Service) downloadExecutable(ctx context.Context, url string, limit int64) ([]byte, error) {
+	return s.readDownload(ctx, url, limit, true)
+}
+
+func (s Service) readDownload(ctx context.Context, url string, limit int64, progress bool) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -261,7 +293,12 @@ func (s Service) download(ctx context.Context, url string, limit int64) ([]byte,
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("upstream download failed: %s", response.Status)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	var reader io.Reader = response.Body
+	if progress {
+		s.report("downloading", 0, response.ContentLength)
+		reader = &downloadReader{Reader: reader, total: response.ContentLength, report: s.report}
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, err
 	}
@@ -269,4 +306,20 @@ func (s Service) download(ctx context.Context, url string, limit int64) ([]byte,
 		return nil, errors.New("empty, oversized or truncated upstream response")
 	}
 	return data, nil
+}
+
+type downloadReader struct {
+	io.Reader
+	received, total, last int64
+	report                func(string, int64, int64)
+}
+
+func (r *downloadReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.received += int64(n)
+	if r.received-r.last >= 64<<10 || err != nil || r.received == r.total {
+		r.report("downloading", r.received, r.total)
+		r.last = r.received
+	}
+	return n, err
 }

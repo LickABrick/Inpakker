@@ -33,12 +33,17 @@ terminal-aware presentation.
 - `internal/updater/`: daily GitHub release discovery, cached update state,
   signed checksum verification, archive validation, and rollback-aware
   executable replacement.
-- `internal/process/`: injectable external-process runner.
+- `internal/process/`: injectable external-process runner and bounded, concurrent
+  diagnostic output capture.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
 - `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
   application, `navigation.go` and `keymap.go` define routes/input precedence,
-  `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs, `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
-  `operations.go` runs cancellable services, and `render.go` composes the shell
+  `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs,
+  `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
+  `actions.go` owns contextual action menus,
+  `create_review.go` previews application creation,
+  `operations.go` runs cancellable services, `results.go` owns session-local result
+  snapshots and workspace-bound retry/folder actions, and `render.go` composes the shell
   and pages using the centralized styles in `theme.go`.
 - `types/types.go`: JSON-backed user, workspace and application configuration types.
 - `README.md`: concise end-user installation, features, and common workflows.
@@ -71,7 +76,7 @@ Development follows version branches rather than merging feature work directly
 into `master`:
 
 - `master` represents released, production-ready code.
-- The active development line is `release/v0.4`; dependency updates target it.
+- The active development line is `release/v0.5`; dependency updates target it.
 - Create a `release/vX.Y` branch for the next planned minor or major release.
   Patch-only release branches may use `release/vX.Y.Z` when they must be prepared
   independently of the next release line.
@@ -193,7 +198,9 @@ the v0.3 formats; no compatibility aliases or automatic migrations are retained.
   Path settings never move files automatically. Preserve safe relative paths,
   Windows reserved-name validation and symlink containment checks.
 - `new` generates a directory slug until manually overridden and never overwrites
-  an application directory. Rollback removes newly created empty directories only.
+  an application directory. `--setup-from` copies one selected installer into the
+  new source directory.
+  Rollback removes only that copied file and newly created empty directories.
 - Cache state lives in `state/workspaces/<UUID>/build-cache.json` under Inpakker
   home, keyed by application UUID. Build skips only matching inputs with existing
   artifacts. Rebuild (`--force`) updates cache; `--no-cache` neither reads nor
@@ -215,6 +222,11 @@ the v0.3 formats; no compatibility aliases or automatic migrations are retained.
   generation. Workspace changes discard old inventory and reject stale results.
 - Refresh, tool detection and update checks stay interactive; foreground packaging,
   unpacking and installation block conflicting operations and support cancellation.
+  Operation results and build tool output remain in scrollable dialogs over the
+  originating page; only explicit application navigation opens a result's app page.
+  Cancellation retains the operation lock until the worker acknowledges completion
+  and preserves partial results. Retry retains original options and target identity;
+  result snapshots never authorize actions in a different workspace.
 - Input priority is window events, active operation, modal/form/input, page, global.
   Backspace edits focused inputs before navigation. Read scalar form submissions
   from Huh result keys, not pointers into copied Bubble Tea model values.

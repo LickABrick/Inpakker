@@ -36,7 +36,10 @@ inpakker new "Mozilla Firefox" --group Browsers --setup-file "Firefox Setup.exe"
 inpakker open "Mozilla Firefox"
 ```
 
-Place the installer in the application's `source` directory, then run:
+To copy an existing installer while creating the application, use
+`--setup-from "C:\Downloads\Firefox Setup.exe"` instead of `--setup-file`.
+This copies only the selected file; add any companion files to the application's
+`source` directory. Otherwise, place the installer there manually, then run:
 
 ```powershell
 inpakker validate
@@ -109,16 +112,42 @@ The shell shows **📦 INPAKKER**, the workspace name and its path. Press `w` fo
 Workspaces, `s` for Settings, `i` for About, and `?` for help. About contains the
 version, update checks and update installation.
 
+To download the packaging tool or decoder, open Settings (`s`), select an
+**External tools** row and press Enter → **Download from official source**.
+Accept the upstream license terms to begin. You can also choose an existing
+executable from the same menu. Attempting to build or unpack with a missing or
+unavailable tool opens this setup menu directly.
+
 On Applications, `/` searches, `Enter` opens details, `n` creates an application,
+and `a` opens the selected application’s action menu.
 `b` builds, `B` opens build options, `v` validates and `u` unpacks. `Ctrl+B`,
 `Ctrl+V` and `Ctrl+U` operate on all applications. `o` opens the selected
 application's root folder in Explorer; on Workspaces it opens the highlighted
 workspace without switching. `r` refreshes in the background.
 
-Creation uses one form with inherited source/output settings and a group
-selector. Forms use arrows, Tab and Shift+Tab; Esc cancels. F2 browses paths in
-workspace/tool dialogs, with manual entry always available. Backspace edits a
-focused input before navigating back. Ctrl+C cancels an active operation.
+Creation uses one form with inherited source/output settings and an optional
+group path with suggestions for existing groups. Forms use arrows, Tab and
+Shift+Tab; Esc cancels. F2 browses workspace/tool paths or selects an installer
+to copy during application creation. A scrollable review shows the application,
+source, setup and output paths before creation; Esc returns to editing. Manual
+path entry remains available. Backspace edits a focused input before navigating back.
+Ctrl+C cancels an active operation.
+Build, validation and unpack results stay in scrollable dialogs, with colored
+status labels. Build tool output opens inside the dialog and returns to the result.
+Result dialogs offer an **Actions** menu (`a`), `o` to open the output folder
+and `r` to retry failed apps.
+Press `L` to reopen the last operation result in the current session. Cancellation
+waits for the worker to stop and keeps completed results. Packaging diagnostics
+remain available even when “Show tool output” is off.
+
+Tool downloads show their current phase and download size when available.
+Settings offers an On/Off control for tool output and validates directory edits
+before saving. Manual update checks and installation remain available when
+automatic checks are disabled.
+
+From the CLI, `inpakker open "Mozilla Firefox" --output` opens the application's
+effective output folder. Retry failures by passing their targets to `build`,
+`validate` or `unpack` again.
 
 Use `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` for plain branding and accessible
 CLI forms. Critical state always has a text/symbol label. See [TUI guide](docs/tui.md).

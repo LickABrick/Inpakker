@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/LickABrick/inpakker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -15,6 +16,9 @@ func newNewCmd() *cobra.Command {
 		Short: "Create a new application configuration",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.SetupFrom != "" && options.SetupFile == "" {
+				options.SetupFile = filepath.Base(options.SetupFrom)
+			}
 			if len(args) == 1 {
 				options.Name = args[0]
 			}
@@ -37,6 +41,7 @@ func newNewCmd() *cobra.Command {
 	command.Flags().StringVar(&options.Group, "group", "", "Group path under the applications directory")
 	command.Flags().StringVar(&options.SourceDirectory, "source-directory", "", "Source directory within the application")
 	command.Flags().StringVar(&options.SetupFile, "setup-file", "", "Setup filename within the source directory")
+	command.Flags().StringVar(&options.SetupFrom, "setup-from", "", "Copy an existing installer into the new source directory (one file only)")
 	command.Flags().StringVar(&options.OutputDirectory, "output-directory", "", "Output directory within the application")
 	command.Flags().BoolVar(&noInput, "no-input", false, "Disable interactive prompts")
 	return command
