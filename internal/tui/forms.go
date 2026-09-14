@@ -22,7 +22,7 @@ func (m *Model) formWithTheme(groups ...*huh.Group) *huh.Form {
 		WithTheme(m.theme.HuhTheme()).
 		WithShowHelp(false).
 		WithWidth(modalInnerWidth(m.width)).
-		WithHeight(formContentHeight(m.height))
+		WithHeight(m.formHeight())
 }
 
 func (m *Model) beginCreate() teaCmd {

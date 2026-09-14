@@ -54,7 +54,9 @@ forms offer F2 browsing with right-arrow directory navigation and Enter selectio
 manual paths remain available.
 
 Settings uses a property list with focused edits. Directory changes explain that
-files will not be moved. To download tools, press `s`, select an **External tools**
+files will not be moved. Boolean settings use On/Off controls. Directory edits
+are validated before saving; a failed save keeps the entered value in the form
+so it can be corrected or retried. To download tools, press `s`, select an **External tools**
 row and press Enter. Choose **Download from official source**, then accept the
 upstream license terms to start downloading. The same menu offers **Choose
 existing executable** for a tool already on disk. No workspace is required.
@@ -71,6 +73,8 @@ Navigation and folder opening stay available. Inventory results carry workspace
 identity and request generation, so a previous workspace or older refresh cannot
 replace current data. Foreground builds, unpacking and installations block
 conflicting actions and support Ctrl+C cancellation.
+Cancellation displays “Cancelling…” until the worker has stopped. Completed
+build, validation and unpack results remain available afterward.
 
 Progress shows the current item (for example “4 of 4”), phase and completed count.
 Completion replaces progress with results inside a dialog, keeping the current
@@ -84,6 +88,24 @@ the dialog and returns to the original page. In other result dialogs, arrows and
 PgUp/PgDn scroll long messages. `l` opens available build tool output in the dialog;
 Enter or Esc returns to the result. Saving/scaffolding dialogs remain open until
 their writes finish.
+
+`o` opens the selected result's output folder (or unpack destination). `r` retries
+failed applications only, keeping the original build options or selected unpack
+package. Retry uses the operation's workspace and application identities, so it
+cannot run against a different selected application or workspace. Missing targets
+must be refreshed before retrying. The CLI equivalent for opening package output
+is `inpakker open "Mozilla Firefox" --output`; retry CLI operations by specifying
+the failed targets again.
+
+`L` reopens the last operation result, including its log, during the current TUI
+session. Workspace results are available only in their originating workspace;
+tool and update results are global. This history is kept in memory and is not
+saved when Inpakker exits. Packaging logs retain the last 256 KiB even when
+“Show tool output” is disabled, with a notice when older output was omitted.
+
+Tool installation reports source lookup, downloading, verification and installation.
+Downloads show received bytes and a progress bar when the upstream supplies a
+total size; unknown sizes show received bytes without an estimated percentage.
 
 ## Folder context
 
@@ -99,6 +121,8 @@ About shows current version, MIT license, repository and update status. `c` chec
 for updates in the background; `u` installs an available update after confirmation.
 Development builds cannot install updates. Available updates produce a subtle
 shell hint pointing to About.
+`INPAKKER_NO_UPDATE_CHECK=1` disables automatic checks only; About's explicit
+check and install actions remain available.
 
 Set `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` for plain branding. CLI forms also
 support Huh accessible mode. State never relies on color. The minimum terminal is

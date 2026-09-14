@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LickABrick/inpakker/internal/packager"
+	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/unpacker"
 	"github.com/LickABrick/inpakker/internal/updater"
 	"github.com/LickABrick/inpakker/internal/workspace"
@@ -35,15 +35,22 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 		m.showError("Validation unavailable", err)
 		return m, nil
 	}
+	return m.validateTargets(targets, all)
+}
+
+func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, tea.Cmd) {
 	op := m.startOperation(operationValidate, validationOperationTitle(all, targets), len(targets))
+	op.targets = targets
 	ws := m.workspace
 	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(op.id), func() tea.Msg {
 		defer close(op.events)
 		valid := 0
 		issues := make([]validationIssue, 0)
+		var operationErr error
 		for index, target := range targets {
 			if err := op.context.Err(); err != nil {
-				return validationDoneMsg{id: op.id, all: all, err: err}
+				operationErr = err
+				break
 			}
 			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "validating"})
 			app := ws.Inspect(target.App.Ref)
@@ -55,7 +62,10 @@ func (m Model) startValidate(all bool) (tea.Model, tea.Cmd) {
 		}
 		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "validation complete"})
 		apps, inspectErr := inspectApplications(ws)
-		return validationDoneMsg{id: op.id, valid: valid, issues: issues, apps: apps, all: all, err: inspectErr}
+		if operationErr == nil {
+			operationErr = inspectErr
+		}
+		return validationDoneMsg{id: op.id, valid: valid, issues: issues, apps: apps, all: all, err: operationErr}
 	})
 }
 
@@ -65,6 +75,10 @@ func (m Model) startBuild(all bool, options packager.BuildOptions) (tea.Model, t
 		m.showError("Build unavailable", err)
 		return m, nil
 	}
+	return m.buildTargets(targets, all, options)
+}
+
+func (m Model) buildTargets(targets []ApplicationView, all bool, options packager.BuildOptions) (tea.Model, tea.Cmd) {
 	if !all && targets[0].App.Status != "valid" {
 		m.showMessage("Build unavailable", targets[0].App.Label()+" cannot be built because its configuration is invalid.\n\nX "+targets[0].App.Error)
 		return m, nil
@@ -79,14 +93,20 @@ func (m Model) startBuild(all bool, options packager.BuildOptions) (tea.Model, t
 		refs = append(refs, target.App.Ref)
 	}
 	op := m.startOperation(operationBuild, buildOperationTitle(all, targets), len(targets))
+	op.targets = targets
+	op.buildOptions = options
 	ws := m.workspace
 	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(op.id), func() tea.Msg {
 		defer close(op.events)
-		var output bytes.Buffer
+		output := process.NewOutputBuffer(256 << 10)
+		options.Diagnostics = output
 		options.OnProgress = func(event packager.Event) {
+			if event.Phase == "checking" {
+				fmt.Fprintln(output, "\n"+event.App)
+			}
 			emitActivity(op, activityEvent{current: event.Index, completed: event.Index - 1, total: event.Total, label: event.App, phase: event.Phase})
 		}
-		results, buildErr := service.Build(op.context, refs, options, &output, &output)
+		results, buildErr := service.Build(op.context, refs, options, io.Discard, io.Discard)
 		emitActivity(op, activityEvent{current: len(results), completed: len(results), total: len(targets), phase: "build complete"})
 		apps, inspectErr := inspectApplications(ws)
 		if buildErr == nil {
@@ -102,6 +122,10 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 		m.showError("Unpacking unavailable", err)
 		return m, nil
 	}
+	return m.unpackTargets(targets, all, selectedPackage)
+}
+
+func (m Model) unpackTargets(targets []ApplicationView, all bool, selectedPackage string) (tea.Model, tea.Cmd) {
 	service := unpacker.Service{DecoderPath: m.workspace.User.Tools.Decoder.Path, Runner: m.runner}
 	if err := service.Validate(); err != nil {
 		m.showMessage("Unpacking unavailable", "The IntuneWinAppUtilDecoder is not configured or cannot be used for this workspace.\n\n"+err.Error()+"\n\nPress d from the application page to open Diagnostics.")
@@ -120,14 +144,19 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 		}
 	}
 	op := m.startOperation(operationUnpack, unpackOperationTitle(all, targets), len(targets))
+	op.targets = targets
+	op.packagePath = selectedPackage
 	ws := m.workspace
 	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(op.id), func() tea.Msg {
 		defer close(op.events)
 		outputs := make([]string, 0)
 		failures := make([]unpackFailure, 0)
+		rows := make([]resultRow, 0)
+		var operationErr error
 		for index, target := range targets {
 			if err := op.context.Err(); err != nil {
-				return unpackDoneMsg{id: op.id, all: all, err: err}
+				operationErr = err
+				break
 			}
 			packagePath := selectedPackage
 			if all {
@@ -136,7 +165,7 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 					if len(target.App.Packages) > 1 {
 						reason = "multiple packages found"
 					}
-					failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: reason})
+					failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: reason, AppID: target.App.Ref.Relative})
 					continue
 				}
 				packagePath = target.App.Packages[0]
@@ -144,14 +173,22 @@ func (m Model) startUnpack(all bool, selectedPackage string) (tea.Model, tea.Cmd
 			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "decoding"})
 			result := service.Unpack(op.context, packagePath, "", false, io.Discard, io.Discard)
 			if result.Err != nil {
-				failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: result.Err.Error()})
+				failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: result.Err.Error(), AppID: target.App.Ref.Relative})
 			} else {
 				outputs = append(outputs, result.Destination)
+				rows = append(rows, resultRow{Name: target.App.Label(), Status: "✓ Unpacked", Detail: result.Destination, OutputDir: result.Destination, AppID: target.App.Ref.Relative})
+			}
+			if op.context.Err() != nil {
+				operationErr = op.context.Err()
+				break
 			}
 		}
 		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "unpack complete"})
 		apps, inspectErr := inspectApplications(ws)
-		return unpackDoneMsg{id: op.id, succeeded: len(outputs), outputs: outputs, failures: failures, apps: apps, all: all, err: inspectErr}
+		if operationErr == nil {
+			operationErr = inspectErr
+		}
+		return unpackDoneMsg{id: op.id, rows: rows, succeeded: len(outputs), outputs: outputs, failures: failures, apps: apps, all: all, err: operationErr}
 	})
 }
 
@@ -188,6 +225,11 @@ func (m *Model) startOperation(kind operationKind, title string, total int) *ope
 		events: make(chan activityEvent), current: activityEvent{total: total, phase: "starting"}, started: timeNow(),
 	}
 	m.operation, m.modal, m.form = op, ModalProgress, nil
+	m.resultRows = nil
+	m.resultCursor = 0
+	m.resultTitle = ""
+	m.modalHasLog = false
+	m.displayedResult = nil
 	return op
 }
 
@@ -196,8 +238,7 @@ func (m *Model) cancelOperation() {
 		return
 	}
 	m.operation.cancel()
-	m.nextOperationID++
-	m.operation = nil
+	m.operation.cancelling = true
 }
 
 func emitActivity(operation *operationState, event activityEvent) {
@@ -229,31 +270,26 @@ func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) 
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
-	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "! Validation was cancelled.")
-		return m, nil
-	}
-	if msg.err != nil {
-		m.showError("Validation failed", msg.err)
-		return m, nil
-	}
 	m.apps.refresh(msg.apps, "")
-	if !msg.all {
-		if len(msg.issues) == 0 {
-			m.showMessage("Validation complete", "✓ Application configuration and source files are valid.")
-		} else {
-			m.showMessage("Validation failed", "X "+msg.issues[0].Name+" is invalid.\n\n"+msg.issues[0].Issue)
-		}
-		return m, nil
-	}
-	m.validationValid, m.validationIssues = msg.valid, msg.issues
-	m.resultTitle = fmt.Sprintf("%d valid · %d invalid", msg.valid, len(msg.issues))
-	m.resultRows = make([]resultRow, 0, len(msg.issues))
+	m.resultRows = nil
 	for _, issue := range msg.issues {
-		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID})
+		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID, Failed: true})
 	}
-	m.resultCursor = 0
-	m.showResults("Validation results")
+	m.resultTitle = fmt.Sprintf("%d valid · %d invalid", msg.valid, len(msg.issues))
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			m.resultTitle += " · ! Cancelled"
+		} else {
+			m.resultRows = append(m.resultRows, resultRow{Name: "Validation", Status: "X Failed", Detail: msg.err.Error()})
+		}
+		m.showResults("Validation results")
+	} else if msg.all {
+		m.showResults("Validation results")
+	} else if len(msg.issues) == 0 {
+		m.showMessage("Validation complete", "✓ Application configuration and source files are valid.")
+	} else {
+		m.showMessage("Validation failed", "X "+msg.issues[0].Name+" is invalid.\n\n"+msg.issues[0].Issue)
+	}
 	return m, nil
 }
 
@@ -272,31 +308,8 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.setLog("Packaging tool output", msg.log)
-	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "! Build was cancelled.")
-		return m, nil
-	}
 	if len(msg.apps) > 0 {
 		m.apps.refresh(msg.apps, "")
-	}
-	if !msg.all && msg.err != nil {
-		m.showError("Build failed", msg.err)
-		return m, nil
-	}
-	if !msg.all && len(msg.results) == 1 {
-		result := msg.results[0]
-		if result.Err != nil {
-			m.showError("Could not build "+result.App.Label(), result.Err)
-		} else if result.Status == packager.StatusCurrent {
-			m.showMessage("Build complete", "✓ "+result.App.Label()+" is already up to date.\n\nNo package needed to be rebuilt.")
-		} else {
-			body := "✓ " + result.App.Label() + " was packaged successfully."
-			if len(result.Artifacts) > 0 {
-				body += "\n\nOutput\n" + strings.Join(result.Artifacts, "\n")
-			}
-			m.showMessage("Build complete", body)
-		}
-		return m, nil
 	}
 	built, current, failed := 0, 0, 0
 	m.resultRows = make([]resultRow, 0, len(msg.results))
@@ -305,7 +318,7 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case result.Err != nil:
 			failed++
-			row.Status, row.Detail = "X Failed", result.Err.Error()
+			row.Status, row.Detail, row.Failed = "X Failed", result.Err.Error(), true
 		case result.Status == packager.StatusCurrent:
 			current++
 			row.Status, row.Detail = "✓ Up to date", result.Reason
@@ -313,14 +326,41 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 			built++
 			row.Status, row.Detail = "✓ Built", strings.Join(result.Artifacts, ", ")
 		}
+		if len(result.Artifacts) > 0 {
+			row.OutputDir = filepath.Dir(result.Artifacts[0])
+		}
 		m.resultRows = append(m.resultRows, row)
 	}
-	if msg.err != nil {
+	if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 		failed++
 		m.resultRows = append(m.resultRows, resultRow{Name: "Build operation", Status: "X Failed", Detail: msg.err.Error()})
 	}
 	m.resultTitle = fmt.Sprintf("%d built · %d up to date · %d failed", built, current, failed)
 	m.resultCursor = 0
+	if errors.Is(msg.err, context.Canceled) {
+		m.resultTitle += " · ! Cancelled"
+	} else {
+		if !msg.all && msg.err != nil {
+			m.showError("Build failed", msg.err)
+			return m, nil
+		}
+		if !msg.all && len(msg.results) == 1 {
+			result := msg.results[0]
+			if result.Err != nil {
+				m.showError("Could not build "+result.App.Label(), result.Err)
+			} else if result.Status == packager.StatusCurrent {
+				m.showMessage("Build complete", "✓ "+result.App.Label()+" is already up to date.\n\nNo package needed to be rebuilt.")
+			} else {
+				body := "✓ " + result.App.Label() + " was packaged successfully."
+				if len(result.Artifacts) > 0 {
+					body += "\n\nOutput\n" + strings.Join(result.Artifacts, "\n")
+				}
+				m.showMessage("Build complete", body)
+			}
+			return m, nil
+		}
+
+	}
 	m.showResults("Build results")
 	return m, nil
 }
@@ -329,37 +369,35 @@ func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
-	if errors.Is(msg.err, context.Canceled) {
-		m.showMessage("Cancelled", "! Unpacking was cancelled.")
-		return m, nil
-	}
-	if msg.err != nil {
-		m.showError("Unpack failed", msg.err)
-		return m, nil
-	}
 	m.apps.refresh(msg.apps, "")
-	if !msg.all {
-		if len(msg.failures) > 0 {
-			m.showMessage("Unpack failed", "X "+msg.failures[0].Name+" could not be unpacked.\n\n"+msg.failures[0].Issue)
-		} else {
-			body := "✓ Package unpacked successfully."
-			if len(msg.outputs) > 0 {
-				body += "\n\nDestination\n" + msg.outputs[0]
-			}
-			m.showMessage("Unpack complete", body)
+	m.resultRows = append([]resultRow(nil), msg.rows...)
+	if len(msg.rows) == 0 {
+		for _, output := range msg.outputs {
+			m.resultRows = append(m.resultRows, resultRow{Name: filepath.Base(output), Status: "✓ Unpacked", Detail: output, OutputDir: output})
 		}
-		return m, nil
-	}
-	m.resultRows = make([]resultRow, 0, msg.succeeded+len(msg.failures))
-	for _, output := range msg.outputs {
-		m.resultRows = append(m.resultRows, resultRow{Name: filepath.Base(output), Status: "✓ Unpacked", Detail: output})
 	}
 	for _, failure := range msg.failures {
-		m.resultRows = append(m.resultRows, resultRow{Name: failure.Name, Status: "X Failed", Detail: failure.Issue})
+		m.resultRows = append(m.resultRows, resultRow{Name: failure.Name, Status: "X Failed", Detail: failure.Issue, AppID: failure.AppID, Failed: true})
 	}
 	m.resultTitle = fmt.Sprintf("%d succeeded · %d failed", msg.succeeded, len(msg.failures))
-	m.resultCursor = 0
-	m.showResults("Unpack results")
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			m.resultTitle += " · ! Cancelled"
+		} else {
+			m.resultRows = append(m.resultRows, resultRow{Name: "Unpacking", Status: "X Failed", Detail: msg.err.Error()})
+		}
+		m.showResults("Unpack results")
+	} else if msg.all {
+		m.showResults("Unpack results")
+	} else if len(msg.failures) > 0 {
+		m.showMessage("Unpack failed", "X "+msg.failures[0].Name+" could not be unpacked.\n\n"+msg.failures[0].Issue)
+	} else {
+		body := "✓ Package unpacked successfully."
+		if len(msg.outputs) > 0 {
+			body += "\n\nDestination\n" + msg.outputs[0]
+		}
+		m.showMessage("Unpack complete", body)
+	}
 	return m, nil
 }
 

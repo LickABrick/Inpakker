@@ -291,6 +291,9 @@ func (m Model) footerView(width int) string {
 	if m.folderTarget() != "" {
 		bindings.short = append([]key.Binding{m.keys.Folder}, bindings.short...)
 	}
+	if m.resultWorkspaceMatches(m.lastResult) {
+		bindings.short = append([]key.Binding{m.keys.LastResult}, bindings.short...)
+	}
 	return m.help.View(bindings)
 }
 
@@ -312,6 +315,9 @@ func (m Model) modalView() string {
 	case ModalNewApplication, ModalWorkspaceForm, ModalBuildOptions, ModalPackageSelect, ModalUpdate, ModalSetting, ModalTool:
 		if m.form != nil {
 			body = m.form.View()
+			if m.modal == ModalSetting && m.settingError != nil {
+				body = m.theme.StatusError.Render(ansi.Truncate("X Could not save: "+m.settingError.Error(), modalInnerWidth(m.width), "…")) + "\n\n" + body
+			}
 		}
 	case ModalMessage, ModalResults:
 		m.prepareModalViewport()
@@ -338,6 +344,21 @@ func (m Model) progressModalView() string {
 	total := max(1, current.total)
 	percent := float64(current.completed) / float64(total)
 	elapsed := time.Since(m.operation.started).Round(time.Second)
+	if m.operation.cancelling {
+		return m.dialog("Cancelling…", m.spinner.View()+" Waiting for the current worker to stop.\n\n"+m.theme.TextMuted.Render("Completed results will be kept."))
+	}
+	if m.operation.kind == operationTool {
+		body := m.spinner.View() + " " + m.theme.StatusActive.Render(titleCase(current.phase))
+		if current.phase == "downloading" {
+			if current.totalBytes > 0 {
+				body += "\n\n" + m.progress.ViewAs(float64(current.bytes)/float64(current.totalBytes))
+				body += fmt.Sprintf("\n%d / %d bytes", current.bytes, current.totalBytes)
+			} else {
+				body += fmt.Sprintf("\n\n%d bytes received", current.bytes)
+			}
+		}
+		return m.dialog(m.operation.title, body+"\n\n"+m.theme.TextMuted.Render(elapsed.String()+" elapsed")+"\n\n"+m.theme.Help.Render("ctrl+c cancel"))
+	}
 	body := m.progress.ViewAs(percent) + fmt.Sprintf("  %d of %d", current.current, current.total) + "\n\n" +
 		m.spinner.View() + " " + m.theme.StatusActive.Render(titleCase(current.phase))
 	if current.label != "" {
@@ -363,6 +384,12 @@ func (m Model) resultHelp() string {
 	}
 	if m.modalHasLog {
 		help += " · l tool output"
+	}
+	if m.resultFolder() != "" {
+		help += " · o open output folder"
+	}
+	if m.displayedResult != nil && len(m.displayedResult.retryIDs) > 0 {
+		help += " · r retry failed"
 	}
 	return help
 }
@@ -408,6 +435,9 @@ func (m *Model) prepareModalViewport() {
 			}
 			if strings.HasPrefix(count, "0 ") {
 				style = m.theme.TextMuted
+			}
+			if strings.HasPrefix(count, "! ") {
+				style = m.theme.StatusWarning
 			}
 			summary[i] = style.Render(count)
 		}
@@ -469,14 +499,14 @@ func (m Model) fullHelp() helpBindings {
 	if m.width < 100 {
 		return helpBindings{full: [][]key.Binding{
 			{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
-			{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.Help, m.keys.Quit},
+			{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack, m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh, m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.LastResult, m.keys.Help, m.keys.Quit},
 		}}
 	}
 	return helpBindings{full: [][]key.Binding{
 		{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, m.keys.Back, m.keys.Escape},
 		{m.keys.Search, m.keys.NewApp, m.keys.Build, m.keys.BuildOptions, m.keys.Validate, m.keys.Unpack},
 		{m.keys.BuildAll, m.keys.ValidateAll, m.keys.UnpackAll, m.keys.Diagnostics, m.keys.Refresh},
-		{m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.Help, m.keys.Quit},
+		{m.keys.Workspaces, m.keys.Settings, m.keys.About, m.keys.Folder, m.keys.LastResult, m.keys.Help, m.keys.Quit},
 	}}
 }
 

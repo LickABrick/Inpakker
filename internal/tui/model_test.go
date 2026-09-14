@@ -313,7 +313,7 @@ func TestCtrlCCancelsOperationWithoutQuitting(t *testing.T) {
 	op := model.startOperation(operationValidate, "Validating", 1)
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
-	if cmd != nil || model.operation != nil || model.modal != ModalMessage {
+	if cmd != nil || model.operation == nil || !model.operation.cancelling || model.modal != ModalProgress {
 		t.Fatalf("cancel result: cmd=%v operation=%v modal=%v", cmd != nil, model.operation != nil, model.modal)
 	}
 	if op.context.Err() == nil {

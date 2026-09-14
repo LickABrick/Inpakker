@@ -33,12 +33,14 @@ terminal-aware presentation.
 - `internal/updater/`: daily GitHub release discovery, cached update state,
   signed checksum verification, archive validation, and rollback-aware
   executable replacement.
-- `internal/process/`: injectable external-process runner.
+- `internal/process/`: injectable external-process runner and bounded, concurrent
+  diagnostic output capture.
 - `internal/pathutil/`: cross-platform safe-relative-path validation.
 - `internal/tui/`: Bubble Tea workspace interface. `model.go` orchestrates the
   application, `navigation.go` and `keymap.go` define routes/input precedence,
   `inventory.go` owns table/search state, `forms.go` defines single-page Huh dialogs, `manager.go` handles workspaces/settings/tools, `picker.go` embeds path browsing,
-  `operations.go` runs cancellable services, and `render.go` composes the shell
+  `operations.go` runs cancellable services, `results.go` owns session-local result
+  snapshots and workspace-bound retry/folder actions, and `render.go` composes the shell
   and pages using the centralized styles in `theme.go`.
 - `types/types.go`: JSON-backed user, workspace and application configuration types.
 - `README.md`: concise end-user installation, features, and common workflows.
@@ -217,6 +219,9 @@ the v0.3 formats; no compatibility aliases or automatic migrations are retained.
   unpacking and installation block conflicting operations and support cancellation.
   Operation results and build tool output remain in scrollable dialogs over the
   originating page; only explicit application navigation opens a result's app page.
+  Cancellation retains the operation lock until the worker acknowledges completion
+  and preserves partial results. Retry retains original options and target identity;
+  result snapshots never authorize actions in a different workspace.
 - Input priority is window events, active operation, modal/form/input, page, global.
   Backspace edits focused inputs before navigation. Read scalar form submissions
   from Huh result keys, not pointers into copied Bubble Tea model values.

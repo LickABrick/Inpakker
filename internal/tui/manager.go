@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,6 +216,10 @@ func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		})
 	case ModalSetting:
 		scope, setting, value, target := m.editScope, m.editKey, m.form.GetString("value"), m.workspaceTarget
+		if setting == "preferences.showToolOutput" {
+			value = strconv.FormatBool(m.form.GetBool("value"))
+		}
+		m.editValue = value
 		ws := m.workspace
 		m.closeModal()
 		m.modal, m.modalTitle, m.modalBody = ModalProgress, "Saving settings", "Saving configuration…"
@@ -250,9 +256,13 @@ func (m Model) completeManagerForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if action == "install" {
-			op := m.startOperation(operationUpdate, "Installing external tool", 1)
-			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-				_, err := (toolmanager.Service{}).Install(op.context, id, accepted)
+			op := m.startOperation(operationTool, "Installing external tool", 1)
+			return m, tea.Batch(m.spinner.Tick, m.waitForActivity(op.id), func() tea.Msg {
+				defer close(op.events)
+				service := toolmanager.Service{OnProgress: func(event toolmanager.Event) {
+					emitActivity(op, activityEvent{phase: event.Phase, bytes: event.Bytes, totalBytes: event.TotalBytes})
+				}}
+				_, err := service.Install(op.context, id, accepted)
 				user, userErr := config.LoadUser()
 				if err == nil {
 					err = userErr
@@ -339,6 +349,7 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.beginToolForm("actions")
 		}
 		m.editScope, m.editKey, m.editValue = row.scope, row.key, row.value
+		m.settingError = nil
 		return m, m.beginSettingForm()
 	case pressed.Text == "I":
 		if row := rows[m.settingCursor]; row.scope == "tool" {
@@ -379,18 +390,40 @@ func (m *Model) beginSettingForm() tea.Cmd {
 		description = "Applications using this workspace default will use the new directory. Existing files will not be moved automatically."
 	}
 	m.modal, m.modalTitle = ModalSetting, "Edit setting"
-	m.form = m.formWithTheme(huh.NewGroup(huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value).Validate(huh.ValidateNotEmpty()), formSubmit("Save setting")))
+	var field huh.Field
+	if m.editKey == "preferences.showToolOutput" {
+		enabled := value == "true"
+		field = huh.NewConfirm().Key("value").Title("Show tool output").Affirmative("On").Negative("Off").Value(&enabled)
+	} else {
+		field = huh.NewInput().Key("value").Title(m.editKey).Description(description).Value(&value).Validate(m.settingValidator())
+	}
+	m.form = m.formWithTheme(huh.NewGroup(field, formSubmit("Save setting")))
 	return m.form.Init()
+}
+
+func (m Model) settingValidator() func(string) error {
+	return func(value string) error {
+		if m.editScope == "global" {
+			copy := m.user
+			return config.SetUserValue(&copy, m.editKey, value)
+		}
+		if m.editScope == "workspace" && m.workspace != nil {
+			copy := m.workspace.Config
+			return config.SetWorkspaceValue(&copy, m.editKey, value)
+		}
+		return huh.ValidateNotEmpty()(strings.TrimSpace(value))
+	}
 }
 func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
 	m.closeModal()
 	if msg.err != nil {
-		m.showError("Could not save settings", msg.err)
-		return m, nil
+		m.settingError = msg.err
+		return m, m.beginSettingForm()
 	}
 	if msg.user != nil {
 		m.user = *msg.user
 	}
+	m.settingError = nil
 	m.registryGeneration++
 	if msg.ws != nil && m.workspace != nil && msg.ws.Config.ID == m.workspace.Config.ID {
 		m.workspace = msg.ws
@@ -455,7 +488,11 @@ func (m Model) handleTools(msg toolsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.detecting = false
 	if msg.err != nil {
-		m.showError("External tools", msg.err)
+		if errors.Is(msg.err, context.Canceled) {
+			m.showMessage("Cancelled", "! Tool installation was cancelled.")
+		} else {
+			m.showError("External tools", msg.err)
+		}
 		return m, nil
 	}
 	if msg.user != nil {

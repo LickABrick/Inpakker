@@ -58,25 +58,31 @@ const (
 	operationValidate
 	operationUnpack
 	operationUpdate
+	operationTool
 )
 
 type operationState struct {
-	id      int
-	kind    operationKind
-	title   string
-	context context.Context
-	cancel  context.CancelFunc
-	events  chan activityEvent
-	current activityEvent
-	started time.Time
+	id           int
+	kind         operationKind
+	title        string
+	context      context.Context
+	cancel       context.CancelFunc
+	events       chan activityEvent
+	current      activityEvent
+	started      time.Time
+	cancelling   bool
+	targets      []ApplicationView
+	buildOptions packager.BuildOptions
+	packagePath  string
 }
 
 type activityEvent struct {
-	completed int
-	current   int
-	total     int
-	label     string
-	phase     string
+	completed         int
+	current           int
+	total             int
+	label             string
+	phase             string
+	bytes, totalBytes int64
 }
 
 type activityMsg struct {
@@ -135,6 +141,7 @@ type buildDoneMsg struct {
 type unpackFailure struct {
 	Name  string
 	Issue string
+	AppID string
 }
 
 type unpackDoneMsg struct {
@@ -145,6 +152,7 @@ type unpackDoneMsg struct {
 	apps      []ApplicationView
 	all       bool
 	err       error
+	rows      []resultRow
 }
 
 type updateDoneMsg struct {
@@ -154,10 +162,12 @@ type updateDoneMsg struct {
 }
 
 type resultRow struct {
-	Name   string
-	Status string
-	Detail string
-	AppID  string
+	Name      string
+	Status    string
+	Detail    string
+	AppID     string
+	OutputDir string
+	Failed    bool
 }
 
 type Model struct {
@@ -186,6 +196,8 @@ type Model struct {
 	toolID             string
 	toolAction         string
 	accepted           bool
+	settingError       error
+	automaticUpdates   bool
 
 	ctx       context.Context
 	root      string
@@ -238,6 +250,8 @@ type Model struct {
 	helpViewport     viewport.Model
 	logViewport      viewport.Model
 	modalViewport    viewport.Model
+	displayedResult  *operationResult
+	lastResult       *operationResult
 }
 
 func New(ctx context.Context, root string, ws *workspace.Workspace, runner process.Runner, updateService *updater.Service, version string) (Model, error) {
@@ -269,10 +283,14 @@ func New(ctx context.Context, root string, ws *workspace.Workspace, runner proce
 	m := Model{
 		user: *user, accessible: os.Getenv("INPAKKER_ACCESSIBLE") == "1" || os.Getenv("ACCESSIBLE") == "1", opener: pathopener.Explorer{}, workspaceSearch: textinput.New(), generation: 1, refreshing: ws != nil, detecting: true, checkingUpdate: updateService != nil,
 		ctx: ctx, root: absRoot, workspace: ws, runner: runner, updater: updateService, version: version,
-		theme: theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
+		automaticUpdates: updateService != nil,
+		theme:            theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
 		routes: []Route{{Kind: RouteApplications}}, spinner: activitySpinner, progress: bar,
 		detailViewport: detailView, helpViewport: helpView, logViewport: logView,
 		modalViewport: viewport.New(viewport.WithWidth(54), viewport.WithHeight(12)),
+	}
+	if m.updater == nil {
+		m.updater = updater.New(version)
 	}
 
 	return m, nil
@@ -286,7 +304,7 @@ func (m Model) Init() tea.Cmd {
 	if m.form != nil {
 		commands = append(commands, m.form.Init())
 	}
-	if m.updater != nil {
+	if m.automaticUpdates {
 		commands = append(commands, m.checkUpdateCmd())
 	}
 	return tea.Batch(commands...)
@@ -309,7 +327,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case settingsMsg:
 		return m.handleSettings(msg)
 	case toolsMsg:
-		return m.handleTools(msg)
+		return m.rememberResult(m.handleTools(msg))
 	case folderMsg:
 		if msg.err != nil {
 			m.showError("Could not open folder", msg.err)
@@ -353,20 +371,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case activityMsg:
 		if m.operation != nil && msg.id == m.operation.id {
-			m.operation.current = msg.activityEvent
+			if !m.operation.cancelling {
+				m.operation.current = msg.activityEvent
+			}
 			return m, m.waitForActivity(msg.id)
 		}
 		return m, nil
 	case activityClosedMsg:
 		return m, nil
 	case validationDoneMsg:
-		return m.handleValidationDone(msg)
+		return m.rememberResult(m.handleValidationDone(msg))
 	case buildDoneMsg:
-		return m.handleBuildDone(msg)
+		return m.rememberResult(m.handleBuildDone(msg))
 	case unpackDoneMsg:
-		return m.handleUnpackDone(msg)
+		return m.rememberResult(m.handleUnpackDone(msg))
 	case updateDoneMsg:
-		return m.handleUpdateDone(msg)
+		return m.rememberResult(m.handleUpdateDone(msg))
 	}
 
 	if tick, ok := msg.(spinner.TickMsg); ok && (m.operation != nil || m.refreshing || m.detecting || m.checkingUpdate) {
@@ -379,7 +399,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.operation != nil {
 		if isKey && key.Matches(keyPress, m.keys.Cancel) {
 			m.cancelOperation()
-			m.showMessage("Cancelled", "! The operation was cancelled.")
 		}
 		return m, nil
 	}
@@ -459,6 +478,10 @@ func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateGlobalKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(pressed, m.keys.LastResult) {
+		m.reopenResult()
+		return m, nil
+	}
 	if key.Matches(pressed, m.keys.Help) {
 		m.modal, m.modalTitle = ModalHelp, "Keyboard shortcuts"
 		m.helpViewport.GotoTop()
@@ -598,6 +621,14 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if pressed, ok := msg.(tea.KeyPressMsg); ok {
+		if m.displayedResult != nil && (m.modal == ModalMessage || m.modal == ModalResults) {
+			if pressed.Text == "r" && len(m.displayedResult.retryIDs) > 0 {
+				return m.retryFailed()
+			}
+			if key.Matches(pressed, m.keys.Folder) {
+				return m, m.openResultFolder()
+			}
+		}
 		if m.modal == ModalLogs {
 			if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open) {
 				m.modal = m.logReturnModal
@@ -703,7 +734,7 @@ func (m *Model) resize(width, height int) {
 	m.logViewport.SetHeight(contentHeight - 3)
 	m.progress.SetWidth(min(48, max(10, contentWidth-10)))
 	if m.form != nil {
-		m.form.WithWidth(modalInnerWidth(width)).WithHeight(formContentHeight(height))
+		m.form.WithWidth(modalInnerWidth(width)).WithHeight(m.formHeight())
 	}
 	if m.modal == ModalMessage || m.modal == ModalResults {
 		m.prepareModalViewport()
@@ -724,6 +755,8 @@ func (m *Model) applyTheme(theme Theme) {
 }
 
 func (m *Model) closeModal() {
+	m.settingError = nil
+	m.displayedResult = nil
 	m.modalHasLog = false
 	m.pathInput = nil
 	m.picking = false
@@ -731,12 +764,14 @@ func (m *Model) closeModal() {
 }
 
 func (m *Model) showMessage(title, body string) {
+	m.displayedResult = nil
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, body, nil, nil
 	m.modalHasLog = false
 	m.modalViewport.GotoTop()
 }
 
 func (m *Model) showError(title string, err error) {
+	m.displayedResult = nil
 	m.modal, m.modalTitle, m.modalBody, m.modalErr, m.form = ModalMessage, title, "", err, nil
 	m.modalHasLog = false
 	m.modalViewport.GotoTop()
@@ -809,4 +844,12 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 		}
 		return updateCheckMsg{result: result}
 	}
+}
+
+func (m Model) formHeight() int {
+	height := formContentHeight(m.height)
+	if m.modal == ModalSetting && m.settingError != nil {
+		height -= 2
+	}
+	return max(4, height)
 }

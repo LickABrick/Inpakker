@@ -127,6 +127,19 @@ entry always available. Backspace edits a focused input before navigating back.
 Ctrl+C cancels an active operation.
 Build, validation and unpack results stay in scrollable dialogs, with colored
 status labels. Build tool output opens inside the dialog and returns to the result.
+Result dialogs offer `o` to open the output folder and `r` to retry failed apps.
+Press `L` to reopen the last operation result in the current session. Cancellation
+waits for the worker to stop and keeps completed results. Packaging diagnostics
+remain available even when “Show tool output” is off.
+
+Tool downloads show their current phase and download size when available.
+Settings offers an On/Off control for tool output and validates directory edits
+before saving. Manual update checks and installation remain available when
+automatic checks are disabled.
+
+From the CLI, `inpakker open "Mozilla Firefox" --output` opens the application's
+effective output folder. Retry failures by passing their targets to `build`,
+`validate` or `unpack` again.
 
 Use `INPAKKER_ACCESSIBLE=1` or `ACCESSIBLE=1` for plain branding and accessible
 CLI forms. Critical state always has a text/symbol label. See [TUI guide](docs/tui.md).

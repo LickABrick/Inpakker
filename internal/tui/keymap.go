@@ -8,7 +8,7 @@ type KeyMap struct {
 	Workspaces, Settings, About, Folder                                                           key.Binding
 	Up, Down, PageUp, PageDown, Open, Back, Escape, Search, NewApp, Build, BuildAll, BuildOptions key.Binding
 	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Refresh                                key.Binding
-	Help, Quit, Cancel, Logs                                                                      key.Binding
+	Help, Quit, Cancel, Logs, LastResult                                                          key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -39,6 +39,7 @@ func DefaultKeyMap() KeyMap {
 		Quit:         binding([]string{"q", "ctrl+c"}, "q", "quit"),
 		Cancel:       binding([]string{"ctrl+c"}, "ctrl+c", "cancel"),
 		Logs:         binding([]string{"l"}, "l", "view log"),
+		LastResult:   binding([]string{"L"}, "L", "last result"),
 	}
 }
 
