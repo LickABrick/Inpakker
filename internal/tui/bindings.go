@@ -62,7 +62,6 @@ func (m Model) pageBindings() []ContextBinding {
 		add(m.keys.PageUp, "")
 		add(m.keys.PageDown, "")
 		custom(m.keys.NewApp, "create workspace", "Create workspace")
-		custom(m.keys.AddWorkspace, "add workspace", "Add workspace")
 		if view, ok := m.highlightedWorkspace(); ok {
 			add(m.keys.Actions, "Workspace actions")
 			custom(m.keys.RelinkWorkspace, "relink", "Relink workspace")
@@ -137,7 +136,7 @@ func (m Model) effectiveBindings() []ContextBinding {
 		}
 		return m.pageBindings()
 	}
-	keys := []key.Binding{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, m.keys.Open, binding([]string{"esc", "backspace"}, "esc", "close")}
+	keys := []key.Binding{m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown, binding([]string{"esc", "backspace"}, "esc", "close")}
 	if m.form != nil {
 		keys = append([]key.Binding{}, m.form.GetFocusedField().KeyBinds()...)
 		if m.formKeys != nil {
@@ -154,11 +153,14 @@ func (m Model) effectiveBindings() []ContextBinding {
 	}
 	if m.modal == ModalCreateReview {
 		keys = append(keys, m.keys.Cancel)
-		keys[4] = binding([]string{"enter"}, "enter", "create")
-		keys[5] = binding([]string{"esc", "backspace"}, "esc", "edit")
+		keys = append(keys, binding([]string{"enter"}, "enter", "create"))
+		keys[4] = binding([]string{"esc", "backspace"}, "esc", "edit")
 	}
 	if m.form == nil && !m.picking && m.modal != ModalPalette {
 		keys = append(keys, m.keys.Help)
+	}
+	if m.modal == ModalLogs {
+		keys = append(keys, binding([]string{"enter"}, "enter", "back to result"))
 	}
 	if m.modal == ModalPalette {
 		keys = []key.Binding{binding([]string{"up", "down"}, "↑/↓", "select"), m.keys.Open, binding(m.keys.Escape.Keys(), "esc", "close")}
@@ -167,6 +169,9 @@ func (m Model) effectiveBindings() []ContextBinding {
 		keys = []key.Binding{m.keys.Up, m.keys.Down, m.keys.Open, binding(m.keys.Escape.Keys(), "esc", "back"), m.keys.Help, m.keys.Cancel}
 	}
 	if m.modal == ModalMessage || m.modal == ModalResults {
+		if m.resultAppID() != "" {
+			keys = append(keys, binding(m.keys.Open.Keys(), m.keys.Open.Help().Key, "open application"))
+		}
 		if m.modal == ModalMessage && m.workspace != nil {
 			keys = append(keys, m.keys.Diagnostics)
 		}

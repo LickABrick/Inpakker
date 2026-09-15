@@ -64,6 +64,14 @@ func (m *Model) beginPalette() tea.Cmd {
 			m.paletteRoutes[b.Command] = route
 		}
 	}
+	if _, exists := m.paletteRoutes["Add workspace"]; !exists {
+		m.paletteCommands = append(m.paletteCommands, ContextBinding{Command: "Add workspace"})
+		m.paletteRoutes["Add workspace"] = RouteWorkspaces
+	}
+	m.paletteRegistryID = ""
+	if v, ok := m.highlightedWorkspace(); ok {
+		m.paletteRegistryID = v.ID
+	}
 	m.paletteAppID = ""
 	m.paletteAppUUID = ""
 	m.paletteWorkspaceID = ""
@@ -98,6 +106,7 @@ func (m Model) filteredCommands() []ContextBinding {
 	return out
 }
 func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.paletteCursor = min(max(0, m.paletteCursor), max(0, len(m.filteredCommands())-1))
 	if p, ok := msg.(tea.KeyPressMsg); ok {
 		switch p.Code {
 		case tea.KeyEscape:
@@ -115,6 +124,10 @@ func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			b := commands[min(m.paletteCursor, len(commands)-1)]
+			if b.Command == "Add workspace" {
+				m.closeModal()
+				return m, m.beginWorkspacePath("add", "")
+			}
 			k := b.Key.Keys()[0]
 			if m.paletteRoutes[b.Command] == m.currentRoute().Kind && (m.currentRoute().Kind == RouteApplications || m.currentRoute().Kind == RouteApplication) && (k == "b" || k == "B" || k == "v" || k == "u" || (k == "a" && b.Command == "Application actions") || k == "o") {
 				found := false
@@ -133,6 +146,21 @@ func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			target := m.paletteRoutes[b.Command]
+			if target == RouteWorkspaces && (b.Command == "Switch workspace" || b.Command == "Workspace actions" || b.Command == "Relink workspace" || b.Command == "Remove workspace registration" || b.Command == "Rename workspace" || b.Command == "Open folder") {
+				found := false
+				for i, v := range m.filteredWorkspaces() {
+					if v.ID == m.paletteRegistryID {
+						m.workspaceCursor = i
+						found = b.Command != "Switch workspace" || v.Status == "ready"
+						break
+					}
+				}
+				if !found {
+					m.showMessage("Workspace unavailable", "The selected registration changed. Reopen Commands.")
+					return m, nil
+				}
+			}
+
 			originalRoutes := append([]Route{}, m.routes...)
 			originalKind := m.currentRoute().Kind
 			m.closeModal()
@@ -163,8 +191,12 @@ func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
+	before := m.paletteSearch.Value()
 	m.paletteSearch, cmd = m.paletteSearch.Update(msg)
-	m.paletteCursor = 0
+	if before != m.paletteSearch.Value() {
+		m.paletteCursor = 0
+	}
+	m.paletteCursor = min(max(0, m.paletteCursor), max(0, len(m.filteredCommands())-1))
 	return m, cmd
 }
 func (m Model) paletteView() string {

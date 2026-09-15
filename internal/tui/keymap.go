@@ -5,19 +5,19 @@ import (
 )
 
 type KeyMap struct {
-	Applications, Palette, CheckUpdates, InstallUpdate, AddWorkspace, RelinkWorkspace, RemoveWorkspace, RenameWorkspace, DetectTools, DownloadTool, ClearTool key.Binding
-	Workspaces, Settings, About, Folder                                                                                                                       key.Binding
-	Up, Down, PageUp, PageDown, Open, Back, Escape, Search, NewApp, Build, BuildAll, BuildOptions                                                             key.Binding
-	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Refresh                                                                                            key.Binding
-	Help, Quit, Cancel, Logs, LastResult                                                                                                                      key.Binding
-	Actions                                                                                                                                                   key.Binding
+	Applications, Palette, CheckUpdates, InstallUpdate, RelinkWorkspace, RemoveWorkspace, RenameWorkspace, DetectTools, DownloadTool, ClearTool key.Binding
+	Workspaces, Settings, About, Folder                                                                                                         key.Binding
+	Up, Down, PageUp, PageDown, Open, Back, Escape, Search, NewApp, Build, BuildAll, BuildOptions                                               key.Binding
+	Validate, ValidateAll, Unpack, UnpackAll, Diagnostics, Refresh                                                                              key.Binding
+	Help, Quit, Cancel, Logs, LastResult                                                                                                        key.Binding
+	Actions                                                                                                                                     key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Applications: binding([]string{"g"}, "g", "applications"), Palette: binding([]string{":"}, ":", "commands"),
 		CheckUpdates: binding([]string{"c"}, "c", "check updates"), InstallUpdate: binding([]string{"u"}, "u", "install update"),
-		AddWorkspace: binding([]string{"A"}, "A", "add workspace"), RelinkWorkspace: binding([]string{"r"}, "r", "relink"), RemoveWorkspace: binding([]string{"x"}, "x", "remove registration"), RenameWorkspace: binding([]string{"e"}, "e", "rename"),
+		RelinkWorkspace: binding([]string{"r"}, "r", "relink"), RemoveWorkspace: binding([]string{"x"}, "x", "remove registration"), RenameWorkspace: binding([]string{"e"}, "e", "rename"),
 		DetectTools: binding([]string{"d"}, "d", "detect tools"), DownloadTool: binding([]string{"I"}, "I", "download"), ClearTool: binding([]string{"x"}, "x", "clear configuration"),
 		Actions:      binding([]string{"a"}, "a", "actions"),
 		Workspaces:   binding([]string{"w"}, "w", "workspaces"),
@@ -37,7 +37,7 @@ func DefaultKeyMap() KeyMap {
 		BuildAll:     binding([]string{"ctrl+b"}, "ctrl+b", "build all"),
 		BuildOptions: binding([]string{"B"}, "B", "build options"),
 		Validate:     binding([]string{"v"}, "v", "validate"),
-		ValidateAll:  binding([]string{"ctrl+v"}, "ctrl+v", "validate all"),
+		ValidateAll:  binding([]string{"V"}, "V", "validate all"),
 		Unpack:       binding([]string{"u"}, "u", "unpack"),
 		UnpackAll:    binding([]string{"ctrl+u"}, "ctrl+u", "unpack all"),
 		Diagnostics:  binding([]string{"d"}, "d", "workspace diagnostics"),

@@ -130,3 +130,29 @@ func (m Model) retryFailed() (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// resultAppID resolves against the current inventory before exposing navigation.
+func (m Model) resultAppID() string {
+	if m.modal == ModalMessage && m.displayedResult == nil {
+		return ""
+	}
+	if m.resultCursor < 0 || m.resultCursor >= len(m.resultRows) {
+		return ""
+	}
+	if m.displayedResult != nil && !m.resultWorkspaceMatches(m.displayedResult) {
+		return ""
+	}
+	id := m.resultRows[m.resultCursor].AppID
+	for _, app := range m.apps.all {
+		if app.App.Ref.Relative != id {
+			continue
+		}
+		if m.displayedResult != nil {
+			if uuid := m.displayedResult.targetUUIDs[id]; uuid != "" && (app.App.Config == nil || app.App.Config.ID != uuid) {
+				return ""
+			}
+		}
+		return id
+	}
+	return ""
+}

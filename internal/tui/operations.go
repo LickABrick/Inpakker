@@ -46,6 +46,7 @@ func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, 
 		defer close(op.events)
 		valid := 0
 		issues := make([]validationIssue, 0)
+		var rows []resultRow
 		var operationErr error
 		for index, target := range targets {
 			if err := op.context.Err(); err != nil {
@@ -56,6 +57,7 @@ func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, 
 			app := ws.Inspect(target.App.Ref)
 			if app.Status == "valid" {
 				valid++
+				rows = append(rows, resultRow{Name: app.Label(), Status: "✓ Valid", AppID: app.Ref.Relative})
 			} else {
 				issues = append(issues, validationIssue{AppID: app.Ref.Relative, Name: app.Label(), Issue: app.Error})
 			}
@@ -65,7 +67,7 @@ func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, 
 		if operationErr == nil {
 			operationErr = inspectErr
 		}
-		return validationDoneMsg{id: op.id, valid: valid, issues: issues, apps: apps, all: all, err: operationErr}
+		return validationDoneMsg{id: op.id, valid: valid, rows: rows, issues: issues, apps: apps, all: all, err: operationErr}
 	})
 }
 
@@ -277,7 +279,7 @@ func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	m.apps.refresh(msg.apps, "")
-	m.resultRows = nil
+	m.resultRows = append([]resultRow(nil), msg.rows...)
 	for _, issue := range msg.issues {
 		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID, Failed: true})
 	}
