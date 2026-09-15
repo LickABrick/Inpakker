@@ -63,9 +63,18 @@ func (m Model) handleRegistry(msg registryMsg) (tea.Model, tea.Cmd) {
 		m.showError("Could not load workspaces", msg.err)
 		return m, nil
 	}
+	selected, selectedOK := m.highlightedWorkspace()
 	m.user.Workspaces, m.user.ActiveWorkspaceID = msg.user.Workspaces, msg.user.ActiveWorkspaceID
 	m.registrations = msg.views
 	m.workspaceCursor = min(m.workspaceCursor, max(0, len(m.filteredWorkspaces())-1))
+	if selectedOK {
+		for i, v := range m.filteredWorkspaces() {
+			if v.ID == selected.ID {
+				m.workspaceCursor = i
+				break
+			}
+		}
+	}
 	return m, nil
 }
 func (m Model) filteredWorkspaces() []workspace.RegistrationView {
@@ -108,8 +117,11 @@ func (m Model) updateWorkspaceSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
+	before := m.workspaceSearch.Value()
 	m.workspaceSearch, cmd = m.workspaceSearch.Update(msg)
-	m.workspaceCursor = 0
+	if before != m.workspaceSearch.Value() {
+		m.workspaceCursor = 0
+	}
 	return m, cmd
 }
 func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -150,8 +162,6 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(pressed, m.keys.Actions):
 		m.beginActions()
 		return m, nil
-	case key.Matches(pressed, m.keys.AddWorkspace):
-		return m, m.beginWorkspacePath("add", "")
 	case key.Matches(pressed, m.keys.RelinkWorkspace):
 		if view, ok := m.highlightedWorkspace(); ok {
 			return m, m.beginWorkspacePath("relink", view.ID)

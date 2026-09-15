@@ -22,6 +22,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/LickABrick/inpakker/internal/packager"
 	"github.com/LickABrick/inpakker/internal/process"
 	"github.com/LickABrick/inpakker/internal/updater"
@@ -127,6 +128,7 @@ type validationDoneMsg struct {
 	id     int
 	valid  int
 	issues []validationIssue
+	rows   []resultRow
 	apps   []ApplicationView
 	all    bool
 	err    error
@@ -226,6 +228,7 @@ type Model struct {
 	paletteAppID       string
 	paletteAppUUID     string
 	paletteWorkspaceID string
+	paletteRegistryID  string
 	diagnosticCursor   int
 	helpContext        []ContextBinding
 	helpReturn         ModalKind
@@ -721,12 +724,12 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modalViewport.SetYOffset(m.resultOffset())
 			return m, nil
 		}
-		if m.modal == ModalResults && key.Matches(pressed, m.keys.Open) && len(m.resultRows) > 0 {
-			if appID := m.resultRows[m.resultCursor].AppID; appID != "" {
+		if (m.modal == ModalMessage || m.modal == ModalResults) && key.Matches(pressed, m.keys.Open) {
+			if appID := m.resultAppID(); appID != "" {
 				m.closeModal()
 				m.pushRoute(Route{Kind: RouteApplication, AppID: appID})
-				return m, nil
 			}
+			return m, nil
 		}
 		if (m.modal == ModalMessage || m.modal == ModalResults) && key.Matches(pressed, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
 			m.prepareModalViewport()
@@ -751,7 +754,7 @@ func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logViewport.GotoTop()
 			return m, nil
 		}
-		if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Open, m.keys.Help) {
+		if key.Matches(pressed, m.keys.Escape, m.keys.Back, m.keys.Help) {
 			if m.modal == ModalHelp && m.helpReturn != ModalNone {
 				m.modal = m.helpReturn
 				m.modalTitle = m.helpReturnTitle
@@ -943,5 +946,14 @@ func (m Model) formHeight() int {
 	if m.modal == ModalSetting && m.settingError != nil {
 		height -= 2
 	}
-	return max(4, height)
+	// Measure fields at their natural height after applying the current width.
+	// Reset prior select limits so growing a terminal can reveal more options.
+	var views []string
+	for _, field := range m.formFields {
+		field.WithWidth(modalInnerWidth(m.width))
+		field.WithHeight(0)
+		views = append(views, field.View())
+	}
+	preferred := lipgloss.Height(strings.Join(views, "\n\n"))
+	return max(4, min(height, preferred))
 }

@@ -14,7 +14,8 @@ inputs keep Backspace for editing.
 
 Use arrows and Enter to select and open items. Optional `j`/`k` aliases work
 outside text inputs. Press `?` for the current page or action/result dialog's
-bindings. The footer shows a compact selection of those same bindings.
+bindings. The footer shows at most seven immediate actions from those same bindings; use
+`?` for complete contextual help and `:` for command discovery.
 
 Press `:` for the fuzzy command palette. Type a few letters, use arrows to
 select, Enter to run, or Esc to close. It includes destinations and available
@@ -61,9 +62,9 @@ tool-setup recovery flow. `B` offers these modes:
 - **Rebuild** packages again even when unchanged and updates build state.
 - **Build without cache** neither reads nor saves build state.
 
-Ctrl+B/Ctrl+V/Ctrl+U operate on the complete application inventory, including
+Ctrl+B / `V` / Ctrl+U operate on the complete application inventory, including
 applications outside the current filter. Exact contextual shortcuts are listed
-in `?`.
+in `?`. Lowercase `v` validates only the selected application.
 
 Workspace diagnostics has selectable checks. Wide terminals show the selected
 check's details beside the list; Enter opens scrollable details at any size.
@@ -94,6 +95,9 @@ it with `--setup-file` to choose a different safe relative destination within th
 source folder. Existing application directories are never overwritten.
 
 ## Forms and settings
+
+Dialogs size to their content within the available terminal height. Small edits
+and confirmations stay compact; longer forms scroll to keep the active field visible.
 
 Up/down and Tab/Shift+Tab navigate text fields; left/right move the cursor and
 Backspace deletes. Empty or invalid text fields do not block navigation.
@@ -144,11 +148,13 @@ as well as update and tool installation results. Success, failure, warning and
 active status text use distinct colors alongside their text/symbol labels.
 
 In batch results, Up/down selects an application and PgUp/PgDn scrolls the full
-details. Enter opens the selected application's page when available; Esc closes
-the dialog and returns to the original page. In other result dialogs, arrows and
-PgUp/PgDn scroll long messages. `l` opens available build tool output in the dialog;
-Enter or Esc returns to the result. Saving/scaffolding dialogs remain open until
-their writes finish.
+details. In both single and batch application results, Enter opens the result
+application's details when it is still available. Esc or Backspace closes the
+dialog and returns to the original page. Generic messages without an application
+target close with Esc or Backspace; Enter does not silently dismiss them.
+Arrows and PgUp/PgDn scroll long messages. `l` opens available build tool output;
+Enter, Esc or Backspace returns to the result. Saving/scaffolding dialogs remain
+open until their writes finish.
 
 Press `a` in a result dialog for its available actions: view tool output, open
 output folder, retry failures, and open application details. Actions appear when

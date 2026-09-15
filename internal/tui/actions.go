@@ -24,7 +24,7 @@ func (m *Model) beginActions() {
 		if len(m.displayedResult.retryIDs) > 0 {
 			m.actions = append(m.actions, menuAction{"Retry failed applications", "retry"})
 		}
-		if len(m.resultRows) > m.resultCursor && m.resultRows[m.resultCursor].AppID != "" {
+		if m.resultAppID() != "" {
 			m.actions = append(m.actions, menuAction{"Open application details", "details"})
 		}
 	} else if m.currentRoute().Kind == RouteWorkspaces {
@@ -120,7 +120,10 @@ func (m Model) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "retry":
 			return m.retryFailed()
 		case "details":
-			id := m.resultRows[m.resultCursor].AppID
+			id := m.resultAppID()
+			if id == "" {
+				return m, nil
+			}
 			m.closeModal()
 			m.pushRoute(Route{Kind: RouteApplication, AppID: id})
 		case "log":

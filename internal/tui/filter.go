@@ -59,8 +59,14 @@ func (m Model) updateOtherFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
+	before := f.input.Value()
 	f.input, cmd = f.input.Update(msg)
-	m.settingCursor = 0
-	m.diagnosticCursor = 0
+	if before != f.input.Value() {
+		if m.currentRoute().Kind == RouteSettings {
+			m.settingCursor = 0
+		} else {
+			m.diagnosticCursor = 0
+		}
+	}
 	return m, cmd
 }

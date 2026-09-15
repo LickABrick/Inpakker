@@ -191,32 +191,43 @@ func (m Model) applicationView(width int) string {
 func (m Model) footerView(width int) string {
 	m.help.SetWidth(width)
 	bindings := m.effectiveBindings()
-	// Keep discovery reachable even when only a few hints fit.
-	if m.modal == ModalNone && !m.apps.searching && !m.workspaceSearching {
+	if m.modal == ModalMessage || m.modal == ModalResults || m.modal == ModalLogs {
 		var ordered []ContextBinding
-		for _, name := range []string{"enter", "a", "/", ":", "?"} {
+		for _, name := range []string{"enter", "a", "esc", "l", "o", "r", "?", "up", "down", "pgup", "pgdown"} {
 			for _, b := range bindings {
 				if b.Key.Keys()[0] == name {
 					ordered = append(ordered, b)
 				}
 			}
 		}
-		for _, b := range bindings {
-			found := false
-			for _, o := range ordered {
-				if o.Key.Keys()[0] == b.Key.Keys()[0] {
-					found = true
+		bindings = ordered
+	}
+	// Keep discovery reachable even when only a few hints fit.
+	if m.modal == ModalNone && !m.apps.searching && !m.workspaceSearching {
+		var ordered []ContextBinding
+		priorities := []string{"enter", "a", "/", ":", "?", "n", "b"}
+		switch m.currentRoute().Kind {
+		case RouteAbout:
+			priorities = []string{"c", "u", "esc", ":", "?"}
+		case RouteApplication:
+			priorities = []string{"a", "esc", ":", "?", "b", "v", "o"}
+		}
+		for _, name := range priorities {
+			for _, b := range bindings {
+				if b.Key.Keys()[0] == name {
+					ordered = append(ordered, b)
 				}
 			}
-			if !found {
-				ordered = append(ordered, b)
-			}
 		}
+
 		bindings = ordered
 	}
 	var hints []string
 	var shown []key.Binding
 	for _, b := range bindings {
+		if len(shown) >= 7 {
+			break
+		}
 		if !b.Key.Enabled() {
 			continue
 		}
@@ -245,7 +256,7 @@ func (m Model) modalView() string {
 	case ModalHelp:
 		viewport := m.helpViewport
 		viewport.SetWidth(modalInnerWidth(m.width))
-		viewport.SetHeight(max(4, min(14, m.height-10)))
+		viewport.SetHeight(min(lipgloss.Height(m.helpContent()), max(4, min(14, m.height-10))))
 		viewport.SetContent(m.helpContent())
 		body = viewport.View() + scrollPosition(viewport)
 	case ModalActions:
