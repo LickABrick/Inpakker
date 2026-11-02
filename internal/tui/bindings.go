@@ -1,9 +1,9 @@
 package tui
 
 import (
-	"fmt"
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"fmt"
 	"github.com/charmbracelet/x/ansi"
 	"strings"
 )
@@ -46,14 +46,12 @@ func (m Model) pageBindings() []ContextBinding {
 			add(m.keys.PageUp, "")
 			add(m.keys.PageDown, "")
 		}
-		if app, ok := m.selectedApplication(); ok {
+		if _, ok := m.selectedApplication(); ok {
 			add(m.keys.Actions, "Application actions")
 			add(m.keys.Build, "Build selected application")
 			add(m.keys.BuildOptions, "Build options")
 			add(m.keys.Validate, "Validate selected application")
-			if len(app.App.Packages) > 0 {
-				add(m.keys.Unpack, "Unpack selected application")
-			}
+			add(m.keys.Unpack, "Unpack selected application")
 		}
 		add(m.keys.Refresh, "Refresh applications")
 		add(m.keys.Diagnostics, "Workspace diagnostics")
