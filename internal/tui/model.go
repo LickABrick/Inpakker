@@ -387,7 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apps.refresh(msg.apps, msg.preferred)
 		return m, nil
 	case verificationDoneMsg:
-		return m.handleVerificationDone(msg)
+		return m.rememberResult(m.handleVerificationDone(msg))
 	case createMsg:
 		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation { return m, nil }
 		if msg.err != nil {
@@ -941,7 +941,7 @@ func (m Model) inventoryCmd(preferred string) tea.Cmd {
 			if group == "." { group = "—" }
 			views = append(views, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(ctx, app, false)})
 		}
-		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: views, groups: groups, checks: workspace.DiagnoseSnapshot(ws, apps), preferred: preferred, err: err}
+		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: views, groups: groups, checks: ws.DiagnoseApps(apps, err), preferred: preferred, err: err}
 	}
 }
 
