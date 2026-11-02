@@ -49,14 +49,17 @@ commands and package information. Narrow terminals keep a single list; duplicate
 application names show relative paths and inventory numbers to remain distinguishable.
 The list has one primary **Status**: an invalid application's validation problem
 takes precedence over its build state. Preview and details provide the fuller
-context. Build labels are ✓ Up to date, • Needs build, ○ Not built, — Unavailable
-and ! Unknown.
+context. Build labels include ✓ Up to date, • Needs build, ○ Not built,
+— Unavailable, ! Verify state and ! Unknown.
 
-Routine inventory refresh uses metadata-based build-state hints instead of
+Routine inventory refresh (`r`) uses metadata-based build-state hints instead of
 reading every source file's contents. Without matching evidence from an exact
-inspection, the state can remain Unknown. Even an Up to date browsing
-hint is not an exact content verification: a normal build still hashes inputs
-before deciding to skip packaging. See [build-state configuration](configuration.md#exact-build-decisions-versus-browsing-hints).
+inspection, **! Verify state** asks for verification rather than claiming the
+application changed. Open `:` and choose **Verify all build states** for an exact
+content inspection of the complete inventory, including filtered-out applications.
+Even an Up to date browsing hint is not an exact content verification: a normal
+build still hashes inputs before deciding to skip packaging. See
+[build-state configuration](configuration.md#exact-build-decisions-versus-browsing-hints).
 
 Enter opens details with the human-readable name, canonical relative path,
 effective source/output, setup file, and install/uninstall command metadata.
@@ -72,7 +75,8 @@ tool-setup recovery flow. `B` offers these modes:
 - **Build without cache** neither reads nor saves build state.
 
 Ctrl+B / `V` / Ctrl+U operate on the complete application inventory, including
-applications outside the current filter. Exact contextual shortcuts are listed
+applications outside the current filter. Bulk action labels show the complete
+inventory count, not only matching rows. Exact contextual shortcuts are listed
 in `?`. Lowercase `v` validates only the selected application.
 
 Workspace diagnostics has selectable checks. Wide terminals show the selected
@@ -85,16 +89,18 @@ setup file and inherited defaults. Editing the directory name stops automatic
 slug updates. The optional Group field accepts an existing or new relative path,
 including nested groups; Ctrl+E completes a suggested existing group. Leave it
 empty for no group. The Group field, not the Applications list's current filter,
-determines where the application is created; verify the resolved location in
-Review application. In the Setup file field, type a relative filename to add
+determines where the application is created. In the Setup file field, type a relative filename to add
 later, or press F2 to select an existing installer (including MSI, EXE and scripts).
 The selected file will be copied into the new source folder; companion files
 are not copied automatically. Editing the setup filename clears the copy selection.
 
-**Review application** shows the resolved application, source, setup and output
-paths before writing anything. Arrows and PgUp/PgDn scroll the preview. Enter
-creates the application; Esc returns to editing with the draft intact. Ctrl+C
-cancels the review. A failed creation preserves the draft for correction or retry.
+Ordinary scaffolding creates directly after the form is submitted; it does not
+require an extra review screen. When copying a selected external installer,
+**Review application** shows the copy source and resolved application, source,
+setup and output paths before writing anything. Arrows and PgUp/PgDn scroll the
+preview. Enter creates the application; Esc returns to editing with the draft
+intact. Ctrl+C cancels the review. A failed creation preserves the draft for
+correction or retry.
 The CLI equivalent is:
 
 ```powershell

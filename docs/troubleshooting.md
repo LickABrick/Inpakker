@@ -370,12 +370,14 @@ and verify that:
 
 ---
 
-## The list says Unknown or looks different from a build result
+## The list says Verify state or looks different from a build result
 
-The TUI's routine inventory refresh uses metadata-based hints. If no matching
-exact-inspection evidence is available, Unknown is expected rather than a claim
-that the application is current. A metadata hint cannot detect every change:
-file contents can change without their size or modification time changing.
+The TUI's routine inventory refresh (`r`) uses metadata-based hints. If no matching
+exact-inspection evidence is available, **! Verify state** asks for verification;
+it does not prove that the application changed. Open `:` and choose **Verify all
+build states** for an exact inspection, including applications outside the current
+filter. A metadata hint cannot detect every change: file contents can change
+without their size or modification time changing.
 
 Run the normal build command to make an exact content-based skip/build decision:
 
