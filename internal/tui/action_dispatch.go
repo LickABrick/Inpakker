@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"path/filepath"
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/LickABrick/inpakker/internal/packager"
 )
@@ -11,6 +14,13 @@ type ActionID string
 // actionForCommand bridges the existing help/palette descriptions to semantic actions.
 // Keyboard dispatch can use the same mapping rather than manufacturing key events.
 func actionForCommand(command string) ActionID {
+	// Bulk labels carry the complete inventory count, not just filtered rows.
+	if base, _, ok := strings.Cut(command, " ("); ok {
+		switch base {
+		case "Build all applications", "Validate all applications", "Unpack all applications":
+			command = base
+		}
+	}
 	switch command {
 	case "Verify all build states":
 		return "verify-build-states"
@@ -117,6 +127,11 @@ func (m Model) ExecuteAction(action ActionID) (tea.Model, tea.Cmd) {
 		return m, m.beginWorkspacePath("add", "")
 	case "workspace-enter", "workspace-r", "workspace-x", "workspace-e":
 		return m.executeWorkspaceAction(action)
+	case "package-folder":
+		if app, ok := m.selectedApplication(); ok && len(app.App.Packages) > 0 && m.opener != nil {
+			path, opener := filepath.Dir(app.App.Packages[0]), m.opener
+			return m, func() tea.Msg { return folderMsg{err: opener.OpenDirectory(path)} }
+		}
 	case "folder", "workspace-o":
 		return m, m.openFolderCmd()
 	case "refresh":

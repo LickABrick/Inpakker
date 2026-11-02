@@ -44,13 +44,13 @@ func (m *Model) beginPalette() tea.Cmd {
 				continue
 			}
 			if route != origin {
-				switch b.Command {
-				case "New application", "Refresh applications", "Build all applications", "Validate all applications", "Workspace diagnostics", "Create workspace", "Add workspace", "Check for updates", "Install update":
+				switch actionForCommand(b.Command) {
+				case "create-app", "refresh", "build-all", "validate-all", "diagnostics", "workspace-create", "workspace-add", "check-update", "install-update":
 				default:
 					continue
 				}
 			}
-			if context.actionAvailability(actionForCommand(b.Command)) != "" {
+			if actionForCommand(b.Command) != "unpack" && context.actionAvailability(actionForCommand(b.Command)) != "" {
 				continue
 			}
 			if b.Command == "Switch workspace" {

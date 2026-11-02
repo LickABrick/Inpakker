@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -35,9 +36,9 @@ func (m Model) pageBindings() []ContextBinding {
 			add(m.keys.PageUp, "")
 			add(m.keys.PageDown, "")
 			if len(m.apps.all) > 0 {
-				add(m.keys.BuildAll, "Build all applications")
-				add(m.keys.ValidateAll, "Validate all applications")
-				add(m.keys.UnpackAll, "Unpack all applications")
+				custom(m.keys.BuildAll, fmt.Sprintf("build all (%d)", len(m.apps.all)), fmt.Sprintf("Build all applications (%d)", len(m.apps.all)))
+				custom(m.keys.ValidateAll, fmt.Sprintf("validate all (%d)", len(m.apps.all)), fmt.Sprintf("Validate all applications (%d)", len(m.apps.all)))
+				custom(m.keys.UnpackAll, fmt.Sprintf("unpack all (%d)", len(m.apps.all)), fmt.Sprintf("Unpack all applications (%d)", len(m.apps.all)))
 			}
 		} else {
 			add(m.keys.Up, "")
@@ -45,12 +46,14 @@ func (m Model) pageBindings() []ContextBinding {
 			add(m.keys.PageUp, "")
 			add(m.keys.PageDown, "")
 		}
-		if _, ok := m.selectedApplication(); ok {
+		if app, ok := m.selectedApplication(); ok {
 			add(m.keys.Actions, "Application actions")
 			add(m.keys.Build, "Build selected application")
 			add(m.keys.BuildOptions, "Build options")
 			add(m.keys.Validate, "Validate selected application")
-			add(m.keys.Unpack, "Unpack selected application")
+			if len(app.App.Packages) > 0 {
+				add(m.keys.Unpack, "Unpack selected application")
+			}
 		}
 		add(m.keys.Refresh, "Refresh applications")
 		add(m.keys.Diagnostics, "Workspace diagnostics")

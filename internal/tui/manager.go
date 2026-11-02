@@ -507,6 +507,7 @@ func (m Model) settingValidator() func(string) error {
 	}
 }
 func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
+	beforeTools := m.user.Tools
 	m.closeModal()
 	if msg.err != nil {
 		m.settingError = msg.err
@@ -517,10 +518,10 @@ func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.settingError = nil
 	m.registryGeneration++
-	refreshInventory := false
+	refreshInventory := beforeTools.ContentPrepTool.Path != m.user.Tools.ContentPrepTool.Path || beforeTools.Decoder.Path != m.user.Tools.Decoder.Path
 	if msg.ws != nil && m.workspace != nil && msg.ws.Config.ID == m.workspace.Config.ID {
 		before, after := m.workspace.Config, msg.ws.Config
-		refreshInventory = before.ApplicationsDirectory != after.ApplicationsDirectory || before.SourceDirectory != after.SourceDirectory || before.OutputDirectory != after.OutputDirectory
+		refreshInventory = refreshInventory || before.ApplicationsDirectory != after.ApplicationsDirectory || before.SourceDirectory != after.SourceDirectory || before.OutputDirectory != after.OutputDirectory
 		m.workspace = msg.ws
 	}
 	if m.workspace != nil {

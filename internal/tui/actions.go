@@ -42,7 +42,10 @@ func (m *Model) beginActions() {
 		m.actions = append(m.actions, menuAction{"Relink", "workspace-r"}, menuAction{"Remove registration", "workspace-x"})
 	} else if app, ok := m.selectedApplication(); ok {
 		m.actionAppID = app.App.Ref.Relative
-		m.actions = []menuAction{{"Build", "build"}, {"Build options / rebuild", "build-options"}, {"Validate", "validate"}, {"Unpack", "unpack"}, {"Open application folder", "folder"}, {"Workspace diagnostics", "diagnostics"}}
+		m.actions = []menuAction{{"Build", "build"}, {"Build options / rebuild", "build-options"}, {"Validate", "validate"}, {"Open application folder", "folder"}}
+		if len(app.App.Packages) > 0 {
+			m.actions = append(m.actions, menuAction{"Unpack", "unpack"}, menuAction{"Open package folder", "package-folder"})
+		}
 	} else {
 		return
 	}
@@ -105,8 +108,8 @@ func (m Model) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.modal = m.actionReturn
 		switch id {
-		case "build", "build-options", "validate", "unpack", "folder", "diagnostics":
-			if m.actionAvailability(ActionID(id)) != "" {
+		case "build", "build-options", "validate", "unpack", "folder", "package-folder":
+			if id != "unpack" && m.actionAvailability(ActionID(id)) != "" {
 				m.modal = ModalActions
 				return m, nil
 			}
@@ -137,7 +140,11 @@ func (m Model) actionsView() string {
 	for i, action := range m.actions {
 		label := action.label
 		if reason := m.actionAvailability(ActionID(action.id)); reason != "" {
-			label += " · disabled: " + reason
+			if action.id == "unpack" {
+				label += " · set up Decoder"
+			} else {
+				label += " · disabled: " + reason
+			}
 		}
 		line := "  " + label
 		if i == m.actionCursor {
