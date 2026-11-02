@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 	"strings"
-	"unicode/utf8"
 )
 
 // matchIndices is shared by inventories and the command palette.
@@ -51,7 +50,7 @@ func (m *Model) beginPalette() tea.Cmd {
 					continue
 				}
 			}
-			if context.actionReason(b.Key.Keys()[0]) != "" {
+			if context.actionAvailability(actionForCommand(b.Command)) != "" {
 				continue
 			}
 			if b.Command == "Switch workspace" {
@@ -67,6 +66,10 @@ func (m *Model) beginPalette() tea.Cmd {
 	if _, exists := m.paletteRoutes["Add workspace"]; !exists {
 		m.paletteCommands = append(m.paletteCommands, ContextBinding{Command: "Add workspace"})
 		m.paletteRoutes["Add workspace"] = RouteWorkspaces
+	}
+	if m.workspace != nil && m.operation == nil {
+		m.paletteCommands = append(m.paletteCommands, ContextBinding{Command: "Verify all build states"})
+		m.paletteRoutes["Verify all build states"] = origin
 	}
 	m.paletteRegistryID = ""
 	if v, ok := m.highlightedWorkspace(); ok {
@@ -128,8 +131,9 @@ func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.closeModal()
 				return m, m.beginWorkspacePath("add", "")
 			}
-			k := b.Key.Keys()[0]
-			if m.paletteRoutes[b.Command] == m.currentRoute().Kind && (m.currentRoute().Kind == RouteApplications || m.currentRoute().Kind == RouteApplication) && (k == "b" || k == "B" || k == "v" || k == "u" || (k == "a" && b.Command == "Application actions") || k == "o") {
+			action := actionForCommand(b.Command)
+			selectedAction := action == "build" || action == "build-options" || action == "validate" || action == "unpack" || action == "actions" || action == "folder"
+			if m.paletteRoutes[b.Command] == m.currentRoute().Kind && (m.currentRoute().Kind == RouteApplications || m.currentRoute().Kind == RouteApplication) && selectedAction {
 				found := false
 				if m.workspace != nil && m.workspace.Config.ID == m.paletteWorkspaceID {
 					for i, app := range m.apps.filtered {
@@ -168,17 +172,7 @@ func (m Model) updatePalette(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushRoute(Route{Kind: target})
 			}
 
-			p := tea.KeyPressMsg{Text: k}
-			p.Code, _ = utf8.DecodeRuneInString(k)
-			if strings.HasPrefix(k, "ctrl+") {
-				p.Text = ""
-				p.Code, _ = utf8.DecodeRuneInString(strings.TrimPrefix(k, "ctrl+"))
-				p.Mod = tea.ModCtrl
-			}
-			if k == "enter" {
-				p = tea.KeyPressMsg{Code: tea.KeyEnter}
-			}
-			updated, cmd := m.dispatchPageKey(p)
+			updated, cmd := m.ExecuteAction(actionForCommand(b.Command))
 			result := updated.(Model)
 			if target != originalKind {
 				if result.currentRoute().Kind == target {

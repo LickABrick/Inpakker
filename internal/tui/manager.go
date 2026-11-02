@@ -146,6 +146,24 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.workspaceSearching = true
 		return m, m.workspaceSearch.Focus()
 	case key.Matches(pressed, m.keys.Open):
+		return m.ExecuteAction("workspace-enter")
+	case key.Matches(pressed, m.keys.NewApp):
+		return m.ExecuteAction("workspace-create")
+	case key.Matches(pressed, m.keys.Actions):
+		return m.ExecuteAction("actions")
+	case key.Matches(pressed, m.keys.RelinkWorkspace):
+		return m.ExecuteAction("workspace-r")
+	case key.Matches(pressed, m.keys.RemoveWorkspace):
+		return m.ExecuteAction("workspace-x")
+	case key.Matches(pressed, m.keys.RenameWorkspace):
+		return m.ExecuteAction("workspace-e")
+	}
+	return m.updateGlobalKey(pressed)
+}
+
+func (m Model) executeWorkspaceAction(action ActionID) (tea.Model, tea.Cmd) {
+	switch action {
+	case "workspace-enter":
 		if view, ok := m.highlightedWorkspace(); ok {
 			if view.Status != "ready" {
 				m.showError("Workspace unavailable", fmt.Errorf("%s; use Relink", view.Error))
@@ -157,17 +175,12 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.NewApp):
-		return m, m.beginWorkspaceCreate()
-	case key.Matches(pressed, m.keys.Actions):
-		m.beginActions()
-		return m, nil
-	case key.Matches(pressed, m.keys.RelinkWorkspace):
+	case "workspace-r":
 		if view, ok := m.highlightedWorkspace(); ok {
 			return m, m.beginWorkspacePath("relink", view.ID)
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.RemoveWorkspace):
+	case "workspace-x":
 		if view, ok := m.highlightedWorkspace(); ok {
 			m.workspaceAction, m.workspaceTarget, m.accepted = "remove", view.ID, false
 			m.modal, m.modalTitle = ModalWorkspaceForm, "Remove workspace registration?"
@@ -175,14 +188,14 @@ func (m Model) updateWorkspaces(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.form.Init()
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.RenameWorkspace):
+	case "workspace-e":
 		if view, ok := m.highlightedWorkspace(); ok && view.Config != nil {
 			m.editScope, m.editKey, m.editValue, m.workspaceTarget = "registered", "name", view.Name, view.Path
 			return m, m.beginSettingForm()
 		}
 		return m, nil
 	}
-	return m.updateGlobalKey(pressed)
+	return m, nil
 }
 func (m *Model) beginWorkspaceCreate() tea.Cmd {
 	defaults := m.user.WorkspaceDefaults
@@ -332,6 +345,7 @@ func (m Model) handleWorkspaceAction(msg workspaceActionMsg) (tea.Model, tea.Cmd
 	}
 	m.registryGeneration++
 	if msg.ws != nil {
+		m.refreshRequests.stop()
 		m.workspace, m.root = msg.ws, msg.ws.Root
 		m.generation++
 		m.refreshing = true
@@ -344,6 +358,7 @@ func (m Model) handleWorkspaceAction(msg workspaceActionMsg) (tea.Model, tea.Cmd
 		return m, tea.Batch(m.registryCmd(), m.inventoryCmd(""), m.spinner.Tick)
 	}
 	if msg.action == "remove" && m.workspace != nil && m.workspace.Config.ID == m.workspaceTarget {
+		m.refreshRequests.stop()
 		m.workspace = nil
 		m.generation++
 		m.refreshing = false
@@ -391,12 +406,35 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.settingCursor = min(len(rows)-1, m.settingCursor+1)
 		return m, nil
 	case key.Matches(pressed, m.keys.DetectTools):
+		return m.ExecuteAction("tools-detect")
+	case key.Matches(pressed, m.keys.Open):
+		return m.ExecuteAction("setting-edit")
+	case key.Matches(pressed, m.keys.DownloadTool):
+		return m.ExecuteAction("tool-download")
+	case key.Matches(pressed, m.keys.ClearTool):
+		return m.ExecuteAction("tool-clear")
+	case key.Matches(pressed, m.keys.Actions):
+		return m.ExecuteAction("tool-actions")
+	}
+	return m.updateGlobalKey(pressed)
+}
+
+func (m Model) executeSettingAction(action ActionID) (tea.Model, tea.Cmd) {
+	// Detection does not depend on the current filter or selected setting.
+	if action == "tools-detect" {
 		if !m.detecting {
 			m.detecting = true
 			return m, tea.Batch(m.spinner.Tick, m.detectToolsCmd())
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.Open):
+	}
+	rows := m.settingsRows()
+	if len(rows) == 0 {
+		return m, nil
+	}
+	m.settingCursor = min(max(0, m.settingCursor), len(rows)-1)
+	switch action {
+	case "setting-edit":
 		row := rows[m.settingCursor]
 		if row.scope == "tool" {
 			m.toolID = row.key
@@ -405,13 +443,13 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.editScope, m.editKey, m.editValue = row.scope, row.key, row.value
 		m.settingError = nil
 		return m, m.beginSettingForm()
-	case key.Matches(pressed, m.keys.DownloadTool):
+	case "tool-download":
 		if row := rows[m.settingCursor]; row.scope == "tool" {
 			m.toolID = row.key
 			return m, m.beginToolForm("install")
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.ClearTool):
+	case "tool-clear":
 		if row := rows[m.settingCursor]; row.scope == "tool" {
 			id := row.key
 			return m, func() tea.Msg {
@@ -421,14 +459,14 @@ func (m Model) updateSettings(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case key.Matches(pressed, m.keys.Actions):
+	case "tool-actions":
 		if row := rows[m.settingCursor]; row.scope == "tool" {
 			m.toolID = row.key
 			return m, m.beginToolForm("actions")
 		}
 
 	}
-	return m.updateGlobalKey(pressed)
+	return m, nil
 }
 func (m *Model) beginSettingForm() tea.Cmd {
 	value := m.editValue
@@ -479,16 +517,22 @@ func (m Model) handleSettings(msg settingsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.settingError = nil
 	m.registryGeneration++
+	refreshInventory := false
 	if msg.ws != nil && m.workspace != nil && msg.ws.Config.ID == m.workspace.Config.ID {
+		before, after := m.workspace.Config, msg.ws.Config
+		refreshInventory = before.ApplicationsDirectory != after.ApplicationsDirectory || before.SourceDirectory != after.SourceDirectory || before.OutputDirectory != after.OutputDirectory
 		m.workspace = msg.ws
 	}
 	if m.workspace != nil {
 		copy := *m.workspace
 		copy.User = m.user
 		m.workspace = &copy
-		m.generation++
-		m.refreshing = true
-		return m, tea.Batch(m.inventoryCmd(""), m.registryCmd(), m.spinner.Tick)
+		if refreshInventory {
+			m.refreshRequests.stop()
+			m.generation++
+			m.refreshing = true
+			return m, tea.Batch(m.inventoryCmd(""), m.registryCmd(), m.spinner.Tick)
+		}
 	}
 	return m, m.registryCmd()
 }
