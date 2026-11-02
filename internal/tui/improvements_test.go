@@ -132,6 +132,11 @@ func TestResultActionsUseOriginalTargetsAndBuildOptions(t *testing.T) {
 	m = updated.(Model)
 	opened := ""
 	m.opener = pathopener.Func(func(path string) error { opened = path; return nil })
+	if m.modal != ModalResults || m.resultCursor != 1 {
+		t.Fatal("mixed results should open at the failed application")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(Model)
 	updated, cmd := m.Update(press("o"))
 	m = updated.(Model)
 	if cmd == nil {
@@ -162,7 +167,7 @@ func TestResultActionsUseOriginalTargetsAndBuildOptions(t *testing.T) {
 	msg := operationWorker(t, cmd)()
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
-	if len(m.resultRows) != 1 || m.resultRows[0].AppID != apps[1].App.Ref.Relative || m.resultRows[0].Failed {
+	if len(m.resultRows) != 1 || m.resultRows[0].AppID != apps[1].App.Ref.Relative || m.resultRows[0].Outcome == resultFailed {
 		t.Fatal("retry did not build only the failed app", m.resultRows)
 	}
 }

@@ -370,6 +370,38 @@ and verify that:
 
 ---
 
+## The list says Verify state or looks different from a build result
+
+The TUI's routine inventory refresh (`r`) uses metadata-based hints. If no matching
+exact-inspection evidence is available, **! Verify state** asks for verification;
+it does not prove that the application changed. Open `:` and choose **Verify all
+build states** for an exact inspection, including applications outside the current
+filter. A metadata hint cannot detect every change: file contents can change
+without their size or modification time changing.
+
+Run the normal build command to make an exact content-based skip/build decision:
+
+```powershell
+inpakker build "Mozilla Firefox"
+```
+
+A normal build also checks that the expected package still exists. `--force`
+rebuilds deliberately; `--no-cache` neither reads nor writes local cache state.
+Optional inspection evidence is disposable user-local state, not workspace data
+and not the successful build cache. Do not delete sources or packages to reset a
+browsing hint.
+
+---
+
+## A successful TUI operation did not open a result dialog
+
+Routine success uses a quiet completion hint. Press `L` for **Last result** to
+inspect details and available tool output. Workspace results belong to their
+originating workspace and remain available only during the current TUI session.
+Failures and cancellation still provide explicit result feedback.
+
+---
+
 ## Build cache error
 
 Run:

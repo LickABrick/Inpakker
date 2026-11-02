@@ -42,7 +42,10 @@ func (m *Model) beginActions() {
 		m.actions = append(m.actions, menuAction{"Relink", "workspace-r"}, menuAction{"Remove registration", "workspace-x"})
 	} else if app, ok := m.selectedApplication(); ok {
 		m.actionAppID = app.App.Ref.Relative
-		m.actions = []menuAction{{"Build", "build"}, {"Build options / rebuild", "build-options"}, {"Validate", "validate"}, {"Unpack", "unpack"}, {"Open application folder", "folder"}, {"Workspace diagnostics", "diagnostics"}}
+		m.actions = []menuAction{{"Build", "build"}, {"Build options / rebuild", "build-options"}, {"Validate", "validate"}, {"Open application folder", "folder"}}
+		if len(app.App.Packages) > 0 {
+			m.actions = append(m.actions, menuAction{"Unpack", "unpack"}, menuAction{"Open package folder", "package-folder"})
+		}
 	} else {
 		return
 	}
@@ -64,6 +67,9 @@ func (m Model) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(pressed, m.keys.Down):
 		m.actionCursor = min(len(m.actions)-1, m.actionCursor+1)
 	case key.Matches(pressed, m.keys.Open):
+		if m.actionCursor < 0 || m.actionCursor >= len(m.actions) {
+			return m, nil
+		}
 		id := m.actions[m.actionCursor].id
 		if strings.HasPrefix(id, "workspace-") {
 			views := m.filteredWorkspaces()
@@ -80,12 +86,7 @@ func (m Model) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.modal = m.actionReturn
-			k := strings.TrimPrefix(id, "workspace-")
-			p := tea.KeyPressMsg{Code: rune(k[0]), Text: k}
-			if k == "enter" {
-				p = tea.KeyPressMsg{Code: tea.KeyEnter}
-			}
-			return m.updateWorkspaces(p)
+			return m.ExecuteAction(ActionID(id))
 		}
 		if m.actionAppID != "" {
 			found := false
@@ -107,13 +108,12 @@ func (m Model) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.modal = m.actionReturn
 		switch id {
-		case "build", "build-options", "validate", "unpack", "folder", "diagnostics":
-			k := m.actionKey(id)
-			if m.actionReason(k) != "" {
+		case "build", "build-options", "validate", "unpack", "folder", "package-folder":
+			if id != "unpack" && m.actionAvailability(ActionID(id)) != "" {
 				m.modal = ModalActions
 				return m, nil
 			}
-			return m.updateGlobalKey(tea.KeyPressMsg{Code: rune(k[0]), Text: k})
+			return m.ExecuteAction(ActionID(id))
 
 		case "output":
 			return m, m.openResultFolder()
@@ -139,8 +139,12 @@ func (m Model) actionsView() string {
 	lines := make([]string, 0, len(m.actions))
 	for i, action := range m.actions {
 		label := action.label
-		if reason := m.actionReason(m.actionKey(action.id)); reason != "" {
-			label += " · disabled: " + reason
+		if reason := m.actionAvailability(ActionID(action.id)); reason != "" {
+			if action.id == "unpack" {
+				label += " · set up Decoder"
+			} else {
+				label += " · disabled: " + reason
+			}
 		}
 		line := "  " + label
 		if i == m.actionCursor {
@@ -167,38 +171,13 @@ func (m Model) actionsView() string {
 	return m.dialog(title, body)
 }
 
-func (m Model) actionKey(id string) string {
-	switch id {
-	case "build":
-		return m.keys.Build.Keys()[0]
-	case "build-options":
-		return m.keys.BuildOptions.Keys()[0]
-	case "validate":
-		return m.keys.Validate.Keys()[0]
-	case "unpack":
-		return m.keys.Unpack.Keys()[0]
-	case "folder":
-		return m.keys.Folder.Keys()[0]
-	case "diagnostics":
-		return m.keys.Diagnostics.Keys()[0]
-	}
-	return ""
-}
-
-// Cached availability is presentation only. The operation service still validates
-// before execution, including paths that changed since tool detection.
-func (m Model) actionReason(k string) string {
+func (m Model) actionAvailability(action ActionID) string {
 	if m.currentRoute().Kind != RouteApplications && m.currentRoute().Kind != RouteApplication {
 		return ""
 	}
-	all := k == m.keys.BuildAll.Keys()[0] || k == m.keys.UnpackAll.Keys()[0]
-	if k == m.keys.BuildAll.Keys()[0] {
-		k = m.keys.Build.Keys()[0]
-	}
-	if k == m.keys.UnpackAll.Keys()[0] {
-		k = m.keys.Unpack.Keys()[0]
-	}
-	if k != m.keys.Build.Keys()[0] && k != m.keys.BuildOptions.Keys()[0] && k != m.keys.Unpack.Keys()[0] {
+	all := action == "build-all" || action == "unpack-all"
+	unpack := action == "unpack" || action == "unpack-all"
+	if action != "build" && action != "build-all" && action != "build-options" && !unpack {
 		return ""
 	}
 	app, ok := m.selectedApplication()
@@ -208,11 +187,11 @@ func (m Model) actionReason(k string) string {
 	if m.workspace == nil {
 		return "No workspace selected"
 	}
-	if !all && k != m.keys.Unpack.Keys()[0] && app.App.Status != "valid" {
+	if !all && !unpack && app.App.Status != "valid" {
 		return "Application configuration invalid"
 	}
 	id, path, name := "content-prep", m.workspace.User.Tools.ContentPrepTool.Path, "Content Prep Tool"
-	if k == m.keys.Unpack.Keys()[0] {
+	if unpack {
 		id, path, name = "decoder", m.workspace.User.Tools.Decoder.Path, "Decoder"
 	}
 	if path == "" {
@@ -223,8 +202,26 @@ func (m Model) actionReason(k string) string {
 			return name + " unavailable"
 		}
 	}
-	if !all && k == m.keys.Unpack.Keys()[0] && len(app.App.Packages) == 0 {
+	if !all && unpack && len(app.App.Packages) == 0 {
 		return "No package exists"
+	}
+	return ""
+}
+
+// Cached availability is presentation only. The operation service still validates
+// before execution, including paths that changed since tool detection.
+func (m Model) actionReason(k string) string {
+	switch k {
+	case m.keys.Build.Keys()[0]:
+		return m.actionAvailability("build")
+	case m.keys.BuildAll.Keys()[0]:
+		return m.actionAvailability("build-all")
+	case m.keys.BuildOptions.Keys()[0]:
+		return m.actionAvailability("build-options")
+	case m.keys.Unpack.Keys()[0]:
+		return m.actionAvailability("unpack")
+	case m.keys.UnpackAll.Keys()[0]:
+		return m.actionAvailability("unpack-all")
 	}
 	return ""
 }

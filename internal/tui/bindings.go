@@ -3,6 +3,7 @@ package tui
 import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"fmt"
 	"github.com/charmbracelet/x/ansi"
 	"strings"
 )
@@ -35,9 +36,9 @@ func (m Model) pageBindings() []ContextBinding {
 			add(m.keys.PageUp, "")
 			add(m.keys.PageDown, "")
 			if len(m.apps.all) > 0 {
-				add(m.keys.BuildAll, "Build all applications")
-				add(m.keys.ValidateAll, "Validate all applications")
-				add(m.keys.UnpackAll, "Unpack all applications")
+				custom(m.keys.BuildAll, fmt.Sprintf("build all (%d)", len(m.apps.all)), fmt.Sprintf("Build all applications (%d)", len(m.apps.all)))
+				custom(m.keys.ValidateAll, fmt.Sprintf("validate all (%d)", len(m.apps.all)), fmt.Sprintf("Validate all applications (%d)", len(m.apps.all)))
+				custom(m.keys.UnpackAll, fmt.Sprintf("unpack all (%d)", len(m.apps.all)), fmt.Sprintf("Unpack all applications (%d)", len(m.apps.all)))
 			}
 		} else {
 			add(m.keys.Up, "")
@@ -226,6 +227,9 @@ func (m Model) dispatchPageKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if key.Matches(pressed, m.keys.Up, m.keys.Down, m.keys.PageUp, m.keys.PageDown) {
 				return m.updatePage(pressed)
 			}
+		}
+		if action := actionForCommand(b.Command); action != "" {
+			return m.ExecuteAction(action)
 		}
 		return m.updateGlobalKey(pressed)
 	}

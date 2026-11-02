@@ -1,6 +1,7 @@
 package packager
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -118,6 +119,80 @@ func TestInspectBuildStateReportsUnavailableAndUnknown(t *testing.T) {
 	}
 	if got := (Service{}).InspectBuildState(ref); got.State != BuildStateUnknown {
 		t.Fatalf("missing workspace state = %q, want %q", got.State, BuildStateUnknown)
+	}
+}
+
+func TestInspectionContextReusesLoadedAppAndCache(t *testing.T) {
+	ws, ref, utility := inspectionWorkspace(t)
+	app := ws.Inspect(ref)
+	output, err := ws.OutputDir(ref, app.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(output, "browser.intunewin")
+	if err := os.WriteFile(artifact, []byte("package"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := buildcache.Fingerprint(ref.Path, &app.Effective.AppConfig, output, utility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := buildcache.Load(cacheDirectory(t, ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Set(app.Config.ID, fingerprint, ref.Path, []string{artifact}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Save(cacheDirectory(t, ws)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	inspection := (Service{Workspace: ws}).NewInspectionContext(ctx)
+	if got := inspection.InspectBuildStateForApp(ctx, app, false); got.State != BuildStateNeedsVerification {
+		t.Fatalf("cold fast inspection = %#v", got)
+	}
+	// These files must not be reloaded by the per-application method.
+	if err := os.WriteFile(filepath.Join(ref.Path, workspace.AppConfigFile), []byte("invalid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDirectory(t, ws), buildcache.FileName), []byte("invalid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := inspection.InspectBuildStateForApp(ctx, app, true); got.State != BuildStateCurrent {
+		t.Fatalf("deep loaded inspection = %#v", got)
+	}
+	if got := inspection.InspectBuildStateForApp(ctx, app, false); got.State != BuildStateCurrent {
+		t.Fatalf("warm fast inspection = %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDirectory(t, ws), buildcache.EvidenceFileName)); !os.IsNotExist(err) {
+		t.Fatalf("read-only inspection wrote evidence: %v", err)
+	}
+	if err := inspection.SaveEvidence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(artifact); err != nil {
+		t.Fatal(err)
+	}
+	if got := inspection.InspectBuildStateForApp(ctx, app, false); got.State != BuildStateNeedsBuild {
+		t.Fatalf("missing artifact fast inspection = %#v", got)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if got := inspection.InspectBuildStateForApp(cancelled, app, false); got.State != BuildStateUnknown {
+		t.Fatalf("cancelled inspection = %#v", got)
+	}
+}
+
+func TestInspectLoadedAppRejectsMissingEffectiveConfig(t *testing.T) {
+	ws, ref, _ := inspectionWorkspace(t)
+	app := ws.Inspect(ref)
+	app.Effective = nil
+	if got := (Service{Workspace: ws}).InspectAppBuildState(app); got.State != BuildStateUnavailable {
+		t.Fatalf("missing effective configuration = %#v", got)
 	}
 }
 

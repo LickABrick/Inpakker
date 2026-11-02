@@ -19,13 +19,14 @@ import (
 
 func (m Model) createCmd() tea.Cmd {
 	options, ws := *m.create, m.workspace
+	generation, workspaceID := m.generation, ws.Config.ID
 	return func() tea.Msg {
 		ref, err := ws.Create(options)
 		if err != nil {
-			return createMsg{err: err}
+			return createMsg{err: err, generation: generation, workspaceID: workspaceID}
 		}
-		apps, inspectErr := inspectApplications(ws)
-		return createMsg{ref: ref, apps: apps, inventoryErr: inspectErr}
+		app := inspectOperationApplication(ws, ref)
+		return createMsg{ref: ref, apps: []ApplicationView{app}, generation: generation, workspaceID: workspaceID}
 	}
 }
 
@@ -47,6 +48,7 @@ func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, 
 		valid := 0
 		issues := make([]validationIssue, 0)
 		var rows []resultRow
+		var apps []ApplicationView
 		var operationErr error
 		for index, target := range targets {
 			if err := op.context.Err(); err != nil {
@@ -54,19 +56,18 @@ func (m Model) validateTargets(targets []ApplicationView, all bool) (tea.Model, 
 				break
 			}
 			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "validating"})
-			app := ws.Inspect(target.App.Ref)
+			app := ws.InspectContext(op.context, target.App.Ref)
+			view := target
+			view.App = app
+			apps = append(apps, view)
 			if app.Status == "valid" {
 				valid++
-				rows = append(rows, resultRow{Name: app.Label(), Status: "✓ Valid", AppID: app.Ref.Relative})
+				rows = append(rows, resultRow{Name: app.Label(), Outcome: resultSuccess, Status: "✓ Valid", AppID: app.Ref.Relative})
 			} else {
 				issues = append(issues, validationIssue{AppID: app.Ref.Relative, Name: app.Label(), Issue: app.Error})
 			}
 		}
 		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "validation complete"})
-		apps, inspectErr := inspectApplications(ws)
-		if operationErr == nil {
-			operationErr = inspectErr
-		}
 		return validationDoneMsg{id: op.id, valid: valid, rows: rows, issues: issues, apps: apps, all: all, err: operationErr}
 	})
 }
@@ -113,9 +114,15 @@ func (m Model) buildTargets(targets []ApplicationView, all bool, options package
 		}
 		results, buildErr := service.Build(op.context, refs, options, io.Discard, io.Discard)
 		emitActivity(op, activityEvent{current: len(results), completed: len(results), total: len(targets), phase: "build complete"})
-		apps, inspectErr := inspectApplications(ws)
-		if buildErr == nil {
-			buildErr = inspectErr
+		apps := make([]ApplicationView, 0, len(results))
+		inspection := service.NewInspectionContext(context.Background())
+		for _, result := range results {
+			app := ws.InspectContext(context.Background(), result.App.Ref)
+			group := filepath.Dir(app.Ref.Relative)
+			if group == "." {
+				group = "—"
+			}
+			apps = append(apps, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(context.Background(), app, false)})
 		}
 		return buildDoneMsg{id: op.id, results: results, apps: apps, all: all, log: strings.TrimSpace(output.String()), err: buildErr}
 	})
@@ -154,7 +161,6 @@ func (m Model) unpackTargets(targets []ApplicationView, all bool, selectedPackag
 	op := m.startOperation(operationUnpack, unpackOperationTitle(all, targets), len(targets))
 	op.targets = targets
 	op.packagePath = selectedPackage
-	ws := m.workspace
 	return m, tea.Batch(m.spinner.Tick, m.waitForActivity(op.id), func() tea.Msg {
 		defer close(op.events)
 		outputs := make([]string, 0)
@@ -184,7 +190,7 @@ func (m Model) unpackTargets(targets []ApplicationView, all bool, selectedPackag
 				failures = append(failures, unpackFailure{Name: target.App.Label(), Issue: result.Err.Error(), AppID: target.App.Ref.Relative})
 			} else {
 				outputs = append(outputs, result.Destination)
-				rows = append(rows, resultRow{Name: target.App.Label(), Status: "✓ Unpacked", Detail: result.Destination, OutputDir: result.Destination, AppID: target.App.Ref.Relative})
+				rows = append(rows, resultRow{Name: target.App.Label(), Outcome: resultSuccess, Status: "✓ Unpacked", Detail: filepath.Base(result.Destination), OutputDir: result.Destination, AppID: target.App.Ref.Relative})
 			}
 			if op.context.Err() != nil {
 				operationErr = op.context.Err()
@@ -192,11 +198,7 @@ func (m Model) unpackTargets(targets []ApplicationView, all bool, selectedPackag
 			}
 		}
 		emitActivity(op, activityEvent{current: len(targets), completed: len(targets), total: len(targets), phase: "unpack complete"})
-		apps, inspectErr := inspectApplications(ws)
-		if operationErr == nil {
-			operationErr = inspectErr
-		}
-		return unpackDoneMsg{id: op.id, rows: rows, succeeded: len(outputs), outputs: outputs, failures: failures, apps: apps, all: all, err: operationErr}
+		return unpackDoneMsg{id: op.id, rows: rows, succeeded: len(outputs), outputs: outputs, failures: failures, all: all, err: operationErr}
 	})
 }
 
@@ -224,6 +226,8 @@ func (m Model) startUpdate() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) startOperation(kind operationKind, title string, total int) *operationState {
+	m.notification = Notification{}
+	m.refreshRequests.stop()
 	m.nextOperationID++
 	m.generation++
 	m.refreshing = false
@@ -275,29 +279,35 @@ func (m Model) waitForActivity(id int) tea.Cmd {
 }
 
 func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) {
+	targets := m.operationTargets(msg.id)
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
-	m.apps.refresh(msg.apps, "")
+	m.apps.merge(msg.apps, "")
 	m.resultRows = append([]resultRow(nil), msg.rows...)
 	for _, issue := range msg.issues {
-		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID, Failed: true})
+		m.resultRows = append(m.resultRows, resultRow{Name: issue.Name, Status: "X Invalid", Detail: issue.Issue, AppID: issue.AppID, Outcome: resultFailed})
 	}
 	m.resultTitle = fmt.Sprintf("%d valid · %d invalid", msg.valid, len(msg.issues))
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) {
-			m.resultTitle += " · ! Cancelled"
+			m.resultTitle += fmt.Sprintf(" · ! Cancelled · %d not processed", max(0, len(targets)-len(m.resultRows)))
 		} else {
-			m.resultRows = append(m.resultRows, resultRow{Name: "Validation", Status: "X Failed", Detail: msg.err.Error()})
+			m.resultRows = append(m.resultRows, resultRow{Name: "Validation", Outcome: resultFailed, Status: "X Failed", Detail: msg.err.Error()})
 		}
 		m.showResults("Validation results")
-	} else if msg.all {
-		m.showResults("Validation results")
-	} else if len(msg.issues) == 0 {
-		m.showMessage("Validation complete", "✓ Application configuration and source files are valid.")
-	} else {
-		m.showMessage("Validation failed", "X "+msg.issues[0].Name+" is invalid.\n\n"+msg.issues[0].Issue)
 	}
+	status := resultSuccess
+	if errors.Is(msg.err, context.Canceled) {
+		status = resultCancelled
+	} else if msg.err != nil || len(msg.issues) > 0 {
+		status = resultFailed
+	}
+	m.presentResult("Validation results", status)
+	if status == resultSuccess && !msg.all && len(targets) == 1 {
+		m.notification.Text = targets[0].App.Label() + " validation passed"
+	}
+	m.notification.Summary = []resultCount{{Status: resultSuccess, Count: msg.valid, Label: "valid"}, {Status: resultFailed, Count: len(msg.issues), Label: "invalid"}}
 	return m, nil
 }
 
@@ -312,27 +322,35 @@ func (m Model) handleBuildDone(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
+	targets := m.operationTargets(msg.id)
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
 	m.setLog("Packaging tool output", msg.log)
 	if len(msg.apps) > 0 {
-		m.apps.refresh(msg.apps, "")
+		m.apps.merge(msg.apps, "")
 	}
 	built, current, failed := 0, 0, 0
 	m.resultRows = make([]resultRow, 0, len(msg.results))
 	for _, result := range msg.results {
-		row := resultRow{Name: result.App.Label(), AppID: result.App.Ref.Relative}
+		row := resultRow{Name: result.App.Label(), AppID: result.App.Ref.Relative, Outcome: resultSuccess}
 		switch {
-		case result.Err != nil:
+		case result.Err != nil || result.Status == packager.StatusFailed:
 			failed++
-			row.Status, row.Detail, row.Failed = "X Failed", result.Err.Error(), true
+			row.Status, row.Detail, row.Outcome = "X Failed", result.Reason, resultFailed
+			if result.Err != nil {
+				row.Detail = result.Err.Error()
+			}
 		case result.Status == packager.StatusCurrent:
 			current++
 			row.Status, row.Detail = "✓ Up to date", result.Reason
 		default:
 			built++
-			row.Status, row.Detail = "✓ Built", strings.Join(result.Artifacts, ", ")
+			names := make([]string, 0, len(result.Artifacts))
+			for _, artifact := range result.Artifacts {
+				names = append(names, filepath.Base(artifact))
+			}
+			row.Status, row.Detail = "✓ Built", strings.Join(names, ", ")
 		}
 		if len(result.Artifacts) > 0 {
 			row.OutputDir = filepath.Dir(result.Artifacts[0])
@@ -341,71 +359,81 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 		failed++
-		m.resultRows = append(m.resultRows, resultRow{Name: "Build operation", Status: "X Failed", Detail: msg.err.Error()})
+		m.resultRows = append(m.resultRows, resultRow{Name: "Build operation", Outcome: resultFailed, Status: "X Failed", Detail: msg.err.Error()})
 	}
 	m.resultTitle = fmt.Sprintf("%d built · %d up to date · %d failed", built, current, failed)
 	m.resultCursor = 0
+	status := resultSuccess
 	if errors.Is(msg.err, context.Canceled) {
-		m.resultTitle += " · ! Cancelled"
-	} else {
+		status = resultCancelled
+		m.resultTitle += fmt.Sprintf(" · ! Cancelled · %d not processed", max(0, len(targets)-len(m.resultRows)))
+	} else if failed > 0 {
+		status = resultFailed
+	}
+	m.notification = Notification{Status: status, Summary: []resultCount{{Status: resultSuccess, Count: built, Label: "built"}, {Status: resultSuccess, Count: current, Label: "up to date"}, {Status: resultFailed, Count: failed, Label: "failed"}}}
+	if status == resultSuccess {
+		m.presentResult("Build results", status)
+		if !msg.all && len(msg.results) == 1 {
+			m.notification.Text = msg.results[0].App.Label() + " packaged successfully"
+			if msg.results[0].Status == packager.StatusCurrent {
+				m.notification.Text = msg.results[0].App.Label() + " is already up to date"
+			}
+		}
+		return m, nil
+	}
+	if status != resultCancelled {
 		if !msg.all && msg.err != nil {
 			m.showError("Build failed", msg.err)
 			return m, nil
 		}
-		if !msg.all && len(msg.results) == 1 {
+		if !msg.all && len(msg.results) == 1 && msg.results[0].Err != nil {
 			result := msg.results[0]
 			if result.Err != nil {
 				m.showError("Could not build "+result.App.Label(), result.Err)
-			} else if result.Status == packager.StatusCurrent {
-				m.showMessage("Build complete", "✓ "+result.App.Label()+" is already up to date.\n\nNo package needed to be rebuilt.")
-			} else {
-				body := "✓ " + result.App.Label() + " was packaged successfully."
-				if len(result.Artifacts) > 0 {
-					body += "\n\nOutput\n" + strings.Join(result.Artifacts, "\n")
-				}
-				m.showMessage("Build complete", body)
 			}
 			return m, nil
 		}
 
 	}
 	m.showResults("Build results")
+	m.resultCursor = firstFailedRow(m.resultRows)
 	return m, nil
 }
 
 func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
+	targets := m.operationTargets(msg.id)
 	if !m.finishOperation(msg.id) {
 		return m, nil
 	}
-	m.apps.refresh(msg.apps, "")
 	m.resultRows = append([]resultRow(nil), msg.rows...)
 	if len(msg.rows) == 0 {
 		for _, output := range msg.outputs {
-			m.resultRows = append(m.resultRows, resultRow{Name: filepath.Base(output), Status: "✓ Unpacked", Detail: output, OutputDir: output})
+			m.resultRows = append(m.resultRows, resultRow{Name: filepath.Base(output), Outcome: resultSuccess, Status: "✓ Unpacked", Detail: filepath.Base(output), OutputDir: output})
 		}
 	}
 	for _, failure := range msg.failures {
-		m.resultRows = append(m.resultRows, resultRow{Name: failure.Name, Status: "X Failed", Detail: failure.Issue, AppID: failure.AppID, Failed: true})
+		m.resultRows = append(m.resultRows, resultRow{Name: failure.Name, Outcome: resultFailed, Status: "X Failed", Detail: failure.Issue, AppID: failure.AppID})
 	}
 	m.resultTitle = fmt.Sprintf("%d succeeded · %d failed", msg.succeeded, len(msg.failures))
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) {
-			m.resultTitle += " · ! Cancelled"
+			m.resultTitle += fmt.Sprintf(" · ! Cancelled · %d not processed", max(0, len(targets)-len(m.resultRows)))
 		} else {
-			m.resultRows = append(m.resultRows, resultRow{Name: "Unpacking", Status: "X Failed", Detail: msg.err.Error()})
+			m.resultRows = append(m.resultRows, resultRow{Name: "Unpacking", Outcome: resultFailed, Status: "X Failed", Detail: msg.err.Error()})
 		}
 		m.showResults("Unpack results")
-	} else if msg.all {
-		m.showResults("Unpack results")
-	} else if len(msg.failures) > 0 {
-		m.showMessage("Unpack failed", "X "+msg.failures[0].Name+" could not be unpacked.\n\n"+msg.failures[0].Issue)
-	} else {
-		body := "✓ Package unpacked successfully."
-		if len(msg.outputs) > 0 {
-			body += "\n\nDestination\n" + msg.outputs[0]
-		}
-		m.showMessage("Unpack complete", body)
 	}
+	status := resultSuccess
+	if errors.Is(msg.err, context.Canceled) {
+		status = resultCancelled
+	} else if msg.err != nil || len(msg.failures) > 0 {
+		status = resultFailed
+	}
+	m.presentResult("Unpack results", status)
+	if status == resultSuccess && !msg.all && len(targets) == 1 {
+		m.notification.Text = targets[0].App.Label() + " unpacked successfully"
+	}
+	m.notification.Summary = []resultCount{{Status: resultSuccess, Count: msg.succeeded, Label: "succeeded"}, {Status: resultFailed, Count: len(msg.failures), Label: "failed"}}
 	return m, nil
 }
 
@@ -462,6 +490,17 @@ func unpackOperationTitle(all bool, targets []ApplicationView) string {
 		return "Unpacking applications"
 	}
 	return "Unpacking " + targets[0].App.Label()
+}
+
+// inspectOperationApplication inspects only a processed application's state.
+func inspectOperationApplication(ws *workspace.Workspace, ref workspace.AppRef) ApplicationView {
+	group := filepath.Dir(ref.Relative)
+	if group == "." {
+		group = "—"
+	}
+	service := packager.Service{Workspace: ws}
+	app := ws.InspectContext(context.Background(), ref)
+	return ApplicationView{App: app, Group: group, Build: service.InspectBuildStateForApp(context.Background(), app, false)}
 }
 
 var timeNow = time.Now

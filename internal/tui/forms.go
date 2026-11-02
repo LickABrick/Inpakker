@@ -48,7 +48,7 @@ func (m *Model) beginCreateForm() teaCmd {
 		checkInput(huh.NewInput().Key("group").Title("Group (optional)").Description("Type an existing or new path; Ctrl+E completes a suggestion. Leave empty for no group.").Value(&m.create.Group).Suggestions(m.groups), "Group", validGroupName),
 		checkInput(m.pathInput, "Setup file", requiredSafePath),
 		huh.NewNote().Title("Workspace defaults").Description(fmt.Sprintf("Source directory: %s\nOutput directory: %s", m.workspace.Config.SourceDirectory, m.workspace.Config.OutputDirectory)),
-		formSubmit("Review application"),
+		formSubmit("Create application"),
 	)
 	m.modal, m.modalTitle = ModalNewApplication, "Create application"
 	return m.form.Init()

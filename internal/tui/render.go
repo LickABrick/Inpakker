@@ -66,9 +66,18 @@ func (m Model) shellView() string {
 	contextLine := m.theme.WorkspaceBar.Width(width).Render(padBetween(ansi.Truncate(workspaceLabel, max(15, width-lipgloss.Width(workspaceRight)-6), "…"), workspaceRight, width-2))
 	separator := m.theme.HorizontalSeparator.Render(strings.Repeat("─", width))
 	contentWidth := max(20, inner-4)
-	page := lipgloss.NewStyle().Width(inner).Height(max(5, m.height-6)).Padding(0, 2).Render(m.pageView(contentWidth, max(5, m.height-6)))
+	pageHeight := max(5, m.height-6)
+	notice := m.notificationView()
+	if notice != "" {
+		pageHeight--
+	}
+	page := lipgloss.NewStyle().Width(inner).Height(pageHeight).Padding(0, 2).Render(m.pageView(contentWidth, pageHeight))
 	footer := lipgloss.NewStyle().Width(width).Padding(0, 1).Render(m.footerView(width - 2))
-	return strings.Join([]string{top, contextLine, separator, page, separator, footer}, "\n")
+	parts := []string{top, contextLine, separator, page}
+	if notice != "" {
+		parts = append(parts, "  "+notice)
+	}
+	return strings.Join(append(parts, separator, footer), "\n")
 }
 
 func (m Model) pageView(width, height int) string {
@@ -122,7 +131,7 @@ func (m Model) applicationsView(width int) string {
 	tableView := m.apps.table.View()
 	if width >= 92 {
 		if app, ok := m.apps.selected(); ok {
-			tableView = m.splitPreview(tableView, m.applicationPreview(app, (width-3)/2), width, max(3, m.height-12))
+			tableView = m.splitPreview(tableView, m.inventoryPreview(app, (width-3)/2), width, max(3, m.height-12))
 		}
 	}
 	output.WriteString(tableView)
@@ -133,6 +142,31 @@ func (m Model) applicationsView(width int) string {
 		output.WriteString(m.theme.TextMuted.Render(fmt.Sprintf("%d of %d applications", m.apps.table.Cursor()+1, len(m.apps.filtered))))
 	}
 	return output.String()
+}
+
+// inventoryPreview keeps the overview focused on the next packaging decision.
+// Full commands and configuration remain available on the application page.
+func (m Model) inventoryPreview(app ApplicationView, width int) string {
+	status := m.styleBuild(app.Build.State)
+	if app.App.Status != "valid" {
+		status = m.styleValidation(app.App)
+	}
+	lines := []string{m.theme.PanelTitle.Render(app.App.Label()), "", status, "", app.App.Ref.Relative}
+	if app.App.Config != nil {
+		lines = append(lines, "", "Setup: "+app.App.Config.SetupFile)
+	}
+	if len(app.App.Packages) > 0 {
+		lines = append(lines, "Package: "+packageFilename(app.App.Packages[0]))
+	}
+	if app.App.Error != "" {
+		lines = append(lines, "", "Validation issue", app.App.Error)
+	}
+	return ansi.Wrap(strings.Join(lines, "\n"), max(1, width), "")
+}
+
+// Package metadata may use Windows separators even when displayed on Linux.
+func packageFilename(path string) string {
+	return filepath.Base(strings.ReplaceAll(path, "\\", "/"))
 }
 
 func (m Model) applicationView(width int) string {
@@ -158,7 +192,7 @@ func (m Model) applicationView(width int) string {
 		keyValue("Packages", packageCount(len(app.App.Packages)), 16),
 	}
 	if len(app.App.Packages) > 0 {
-		packageLines = append(packageLines, keyValue("Output", ansi.Truncate(app.App.Packages[0], max(18, width/2), "…"), 16))
+		packageLines = append(packageLines, keyValue("Output", ansi.Truncate(packageFilename(app.App.Packages[0]), max(18, width/2), "…"), 16))
 	}
 	packagePanel := m.theme.Panel.Render(strings.Join(packageLines, "\n"))
 	cfg := app.App.Config
@@ -178,12 +212,9 @@ func (m Model) applicationView(width int) string {
 	if len(app.App.Packages) > 0 {
 		var packages []string
 		for _, item := range app.App.Packages {
-			packages = append(packages, filepath.Base(item)+"\n"+m.theme.TextMuted.Render(ansi.Wrap(item, width, "")))
+			packages = append(packages, m.theme.Text.Render(ansi.Wrap(packageFilename(item), max(1, width), "")))
 		}
 		panels += "\n\n" + m.theme.PageTitle.Render("Package") + "\n\n" + strings.Join(packages, "\n\n")
-	}
-	if strings.TrimSpace(m.workspace.User.Tools.Decoder.Path) == "" {
-		panels += "\n\n" + m.theme.StatusMuted.Render("— Unpack unavailable: decoder is not configured")
 	}
 	return heading + "\n\n" + panels
 }
@@ -337,11 +368,24 @@ func (m Model) resultRowView(index int) string {
 		prefix = "› "
 	}
 	heading := m.theme.Text.Bold(index == m.resultCursor).Render(ansi.Wrap(prefix+row.Name, width, ""))
-	body := heading + "\n" + m.styleStatus(row.Status)
+	body := heading + "\n" + m.styleResultStatus(row)
 	if row.Detail != "" {
 		body += "\n" + m.theme.TextMuted.Render(ansi.Wrap(row.Detail, width, ""))
 	}
 	return body
+}
+
+func (m Model) styleResultStatus(row resultRow) string {
+	style := m.theme.Text
+	switch row.Outcome {
+	case resultSuccess:
+		style = m.theme.StatusSuccess
+	case resultFailed:
+		style = m.theme.StatusError
+	case resultCancelled:
+		style = m.theme.StatusWarning
+	}
+	return style.Render(row.Status)
 }
 
 func (m Model) resultOffset() int {
@@ -376,10 +420,13 @@ func (m *Model) prepareModalViewport() {
 			}
 			summary[i] = style.Render(count)
 		}
-		body = strings.Join(summary, " · ")
+		var results strings.Builder
+		results.WriteString(strings.Join(summary, " · "))
 		for i := range m.resultRows {
-			body += "\n\n" + m.resultRowView(i)
+			results.WriteString("\n\n")
+			results.WriteString(m.resultRowView(i))
 		}
+		body = results.String()
 	}
 	body = ansi.Wrap(body, width, "")
 	helpHeight := 1
@@ -437,6 +484,10 @@ func modalInnerWidth(terminalWidth int) int { return max(32, modalContentWidth(t
 func formContentHeight(terminalHeight int) int { return max(6, terminalHeight-10) }
 
 func padBetween(left, right string, width int) string {
+	width = max(1, width)
+	// External names and background messages must not push the shell wider
+	// than the terminal. Keep a little space for the left-hand context.
+	right = ansi.Truncate(right, max(1, width/2), "…")
 	if right == "" {
 		return ansi.Truncate(left, width, "…")
 	}

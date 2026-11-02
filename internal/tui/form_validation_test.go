@@ -69,7 +69,7 @@ func TestEmptyFieldsRemainNavigableUntilSubmission(t *testing.T) {
 		m = updated.(Model)
 		navigateForm(t, &m, next)
 		navigateForm(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
-		if m.modal != ModalCreateReview || m.create.SetupFile != "install.ps1" {
+		if m.modal != ModalProgress || m.form != nil || m.create.SetupFile != "install.ps1" {
 			t.Fatal("corrected form did not submit")
 		}
 	}

@@ -554,6 +554,21 @@ The cache is local state and should not be committed with a workspace.
 
 A cached build can be skipped only when the relevant inputs still match and the expected output package still exists.
 
+### Exact build decisions versus browsing hints
+
+Build skipping uses an exact content fingerprint. A metadata-only browsing hint
+must never be used on its own to skip packaging: files can have identical sizes
+and modification times while containing different bytes.
+
+Optional local inspection evidence is a regenerable index for browsing, not a
+successful-build record or portable configuration. It belongs under the user's
+state directory, never in `inpakker.workspace.json` or `inpakker.app.json`.
+Discarding this evidence does not delete sources, packages or registrations;
+inspection must simply establish fresh evidence. It is separate from
+`build-cache.json`, which records successful builds.
+
+`--no-cache` must bypass both build-cache and inspection-evidence reads and writes.
+
 ---
 
 ## Normal build
