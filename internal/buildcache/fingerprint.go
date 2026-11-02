@@ -49,11 +49,11 @@ func FingerprintContext(ctx context.Context, appPath string, cfg *types.AppConfi
 // same-size/same-mtime tool edit retains the initially observed identity until
 // the next operation. Fingerprinter is not safe for concurrent use.
 type Fingerprinter struct {
-	utilityPath string
-	utilitySize int64
+	utilityPath     string
+	utilitySize     int64
 	utilityModified int64
-	utilitySHA256 string
-	openTool func(string) (io.ReadCloser, error)
+	utilitySHA256   string
+	openTool        func(string) (io.ReadCloser, error)
 }
 
 // NewFingerprinter reads and hashes the packaging utility exactly once.
@@ -87,11 +87,11 @@ func newFingerprinter(ctx context.Context, utilityPath string, open func(string)
 		return nil, err
 	}
 	return &Fingerprinter{
-		utilityPath: filepath.Clean(utilityPath),
-		utilitySize: utilityInfo.Size(),
+		utilityPath:     filepath.Clean(utilityPath),
+		utilitySize:     utilityInfo.Size(),
 		utilityModified: utilityInfo.ModTime().UnixNano(),
-		utilitySHA256: hex.EncodeToString(toolHash.Sum(nil)),
-		openTool: open,
+		utilitySHA256:   hex.EncodeToString(toolHash.Sum(nil)),
+		openTool:        open,
 	}, nil
 }
 
@@ -189,7 +189,7 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, appPath string, cfg *ty
 }
 
 type contextReader struct {
-	ctx context.Context
+	ctx    context.Context
 	reader io.Reader
 }
 

@@ -11,13 +11,13 @@ import (
 // one inventory operation. It is not safe for concurrent use. Discard it after
 // the operation so later refreshes observe fresh local state.
 type InspectionContext struct {
-	service   Service
-	cache     *buildcache.Cache
-	cacheErr  error
-	toolErr   error
+	service       Service
+	cache         *buildcache.Cache
+	cacheErr      error
+	toolErr       error
 	fingerprinter *buildcache.Fingerprinter
-	evidence  *buildcache.InspectionEvidence
-	directory string
+	evidence      *buildcache.InspectionEvidence
+	directory     string
 }
 
 func (s Service) NewInspectionContext(ctx context.Context) *InspectionContext {

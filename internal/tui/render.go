@@ -68,11 +68,15 @@ func (m Model) shellView() string {
 	contentWidth := max(20, inner-4)
 	pageHeight := max(5, m.height-6)
 	notice := m.notificationView()
-	if notice != "" { pageHeight-- }
+	if notice != "" {
+		pageHeight--
+	}
 	page := lipgloss.NewStyle().Width(inner).Height(pageHeight).Padding(0, 2).Render(m.pageView(contentWidth, pageHeight))
 	footer := lipgloss.NewStyle().Width(width).Padding(0, 1).Render(m.footerView(width - 2))
 	parts := []string{top, contextLine, separator, page}
-	if notice != "" { parts = append(parts, "  "+notice) }
+	if notice != "" {
+		parts = append(parts, "  "+notice)
+	}
 	return strings.Join(append(parts, separator, footer), "\n")
 }
 

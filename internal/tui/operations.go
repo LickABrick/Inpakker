@@ -119,7 +119,9 @@ func (m Model) buildTargets(targets []ApplicationView, all bool, options package
 		for _, result := range results {
 			app := ws.InspectContext(context.Background(), result.App.Ref)
 			group := filepath.Dir(app.Ref.Relative)
-			if group == "." { group = "—" }
+			if group == "." {
+				group = "—"
+			}
 			apps = append(apps, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(context.Background(), app, false)})
 		}
 		return buildDoneMsg{id: op.id, results: results, apps: apps, all: all, log: strings.TrimSpace(output.String()), err: buildErr}
@@ -302,7 +304,9 @@ func (m Model) handleValidationDone(msg validationDoneMsg) (tea.Model, tea.Cmd) 
 		status = resultFailed
 	}
 	m.presentResult("Validation results", status)
-	if status == resultSuccess && !msg.all && len(targets) == 1 { m.notification.Text = targets[0].App.Label()+" validation passed" }
+	if status == resultSuccess && !msg.all && len(targets) == 1 {
+		m.notification.Text = targets[0].App.Label() + " validation passed"
+	}
 	m.notification.Summary = []resultCount{{Status: resultSuccess, Count: msg.valid, Label: "valid"}, {Status: resultFailed, Count: len(msg.issues), Label: "invalid"}}
 	return m, nil
 }
@@ -343,7 +347,9 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 		default:
 			built++
 			names := make([]string, 0, len(result.Artifacts))
-			for _, artifact := range result.Artifacts { names = append(names, filepath.Base(artifact)) }
+			for _, artifact := range result.Artifacts {
+				names = append(names, filepath.Base(artifact))
+			}
 			row.Status, row.Detail = "✓ Built", strings.Join(names, ", ")
 		}
 		if len(result.Artifacts) > 0 {
@@ -368,8 +374,10 @@ func (m Model) buildResult(msg buildDoneMsg) (tea.Model, tea.Cmd) {
 	if status == resultSuccess {
 		m.presentResult("Build results", status)
 		if !msg.all && len(msg.results) == 1 {
-			m.notification.Text = msg.results[0].App.Label()+" packaged successfully"
-			if msg.results[0].Status == packager.StatusCurrent { m.notification.Text = msg.results[0].App.Label()+" is already up to date" }
+			m.notification.Text = msg.results[0].App.Label() + " packaged successfully"
+			if msg.results[0].Status == packager.StatusCurrent {
+				m.notification.Text = msg.results[0].App.Label() + " is already up to date"
+			}
 		}
 		return m, nil
 	}
@@ -422,7 +430,9 @@ func (m Model) handleUnpackDone(msg unpackDoneMsg) (tea.Model, tea.Cmd) {
 		status = resultFailed
 	}
 	m.presentResult("Unpack results", status)
-	if status == resultSuccess && !msg.all && len(targets) == 1 { m.notification.Text = targets[0].App.Label()+" unpacked successfully" }
+	if status == resultSuccess && !msg.all && len(targets) == 1 {
+		m.notification.Text = targets[0].App.Label() + " unpacked successfully"
+	}
 	m.notification.Summary = []resultCount{{Status: resultSuccess, Count: msg.succeeded, Label: "succeeded"}, {Status: resultFailed, Count: len(msg.failures), Label: "failed"}}
 	return m, nil
 }

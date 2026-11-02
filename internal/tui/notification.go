@@ -29,16 +29,16 @@ const (
 // Notification is session-local feedback. It stays visible until another
 // operation starts; no timer or background work is required to render it.
 type Notification struct {
-	Status resultStatus
-	Text   string
+	Status  resultStatus
+	Text    string
 	Summary []resultCount
 }
 
 // resultCount carries summary styling without parsing translated display text.
 type resultCount struct {
 	Status resultStatus
-	Count int
-	Label string
+	Count  int
+	Label  string
 }
 
 func (m *Model) presentResult(title string, status resultStatus) {
@@ -63,8 +63,12 @@ func (m Model) notificationView() string {
 	}
 	prefix := "✓ "
 	style := m.theme.StatusSuccess
-	if m.notification.Status == resultFailed { prefix, style = "X ", m.theme.StatusError }
-	if m.notification.Status == resultCancelled { prefix, style = "! ", m.theme.StatusWarning }
+	if m.notification.Status == resultFailed {
+		prefix, style = "X ", m.theme.StatusError
+	}
+	if m.notification.Status == resultCancelled {
+		prefix, style = "! ", m.theme.StatusWarning
+	}
 	text := ansi.Truncate(prefix+m.notification.Text, max(1, m.width-4), "…")
 	return style.Render(text)
 }

@@ -146,14 +146,18 @@ func (m Model) retryFailed() (tea.Model, tea.Cmd) {
 
 func firstFailedRow(rows []resultRow) int {
 	for i, row := range rows {
-		if row.Outcome == resultFailed { return i }
+		if row.Outcome == resultFailed {
+			return i
+		}
 	}
 	return 0
 }
 
 // operationTargets captures the original request before completion unlocks it.
 func (m Model) operationTargets(id int) []ApplicationView {
-	if m.operation == nil || m.operation.id != id { return nil }
+	if m.operation == nil || m.operation.id != id {
+		return nil
+	}
 	return m.operation.targets
 }
 

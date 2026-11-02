@@ -133,7 +133,10 @@ func TestBulkCommandLabelsCountUnfilteredInventory(t *testing.T) {
 	found := 0
 	for _, b := range m.pageBindings() {
 		action := actionForCommand(b.Command)
-		for _, item := range []struct{ action ActionID; label string }{
+		for _, item := range []struct {
+			action ActionID
+			label  string
+		}{
 			{"build-all", "Build all applications"},
 			{"validate-all", "Validate all applications"},
 			{"unpack-all", "Unpack all applications"},

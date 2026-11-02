@@ -108,8 +108,8 @@ type inventoryMsg struct {
 }
 
 type createMsg struct {
-	workspaceID string
-	generation int
+	workspaceID  string
+	generation   int
 	ref          workspace.AppRef
 	apps         []ApplicationView
 	err          error
@@ -179,7 +179,7 @@ type resultRow struct {
 }
 
 type Model struct {
-	notification Notification
+	notification       Notification
 	user               types.UserConfig
 	accessible         bool
 	opener             pathopener.PathOpener
@@ -381,7 +381,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.groups = msg.groups
 		m.diagnostics = msg.checks
 		if msg.err != nil {
-			if !errors.Is(msg.err, context.Canceled) { m.notification = Notification{Status: resultFailed, Text: "Refresh failed: "+msg.err.Error()} }
+			if !errors.Is(msg.err, context.Canceled) {
+				m.notification = Notification{Status: resultFailed, Text: "Refresh failed: " + msg.err.Error()}
+			}
 			return m, nil
 		}
 		m.apps.refresh(msg.apps, msg.preferred)
@@ -389,7 +391,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case verificationDoneMsg:
 		return m.rememberResult(m.handleVerificationDone(msg))
 	case createMsg:
-		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation { return m, nil }
+		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation {
+			return m, nil
+		}
 		if msg.err != nil {
 			if m.create.SetupFrom == "" {
 				cmd := m.beginCreateForm()
@@ -927,12 +931,18 @@ func (m *Model) refreshCmd(preferred string) tea.Cmd {
 func (m Model) inventoryCmd(preferred string) tea.Cmd {
 	ws, generation := m.workspace, m.generation
 	requests := m.refreshRequests
-	if requests == nil { requests = &refreshCoordinator{} }
+	if requests == nil {
+		requests = &refreshCoordinator{}
+	}
 	parent := m.ctx
-	if parent == nil { parent = context.Background() }
+	if parent == nil {
+		parent = context.Background()
+	}
 	ctx := requests.request(parent)
 	return func() tea.Msg {
-		if ws == nil { return nil }
+		if ws == nil {
+			return nil
+		}
 		requests.worker.Lock()
 		defer requests.worker.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -942,9 +952,14 @@ func (m Model) inventoryCmd(preferred string) tea.Cmd {
 		views := make([]ApplicationView, 0, len(apps))
 		inspection := (packager.Service{Workspace: ws}).NewInspectionContext(ctx)
 		for _, app := range apps {
-			if ctx.Err() != nil { err = ctx.Err(); break }
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				break
+			}
 			group := filepath.Dir(app.Ref.Relative)
-			if group == "." { group = "—" }
+			if group == "." {
+				group = "—"
+			}
 			views = append(views, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(ctx, app, false)})
 		}
 		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: views, groups: groups, checks: ws.DiagnoseApps(apps, err), preferred: preferred, err: err}
