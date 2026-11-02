@@ -46,8 +46,17 @@ empty Applications list. Tools may be configured later.
 The list uses the available height and adds a concise preview on terminals around
 100 columns and wider. The preview shows validation, build state, path, setup,
 commands and package information. Narrow terminals keep a single list; duplicate
-application names show relative paths and inventory numbers to remain distinguishable. Build labels are ✓ Up to date,
-• Needs build, ○ Not built, — Unavailable and ! Unknown.
+application names show relative paths and inventory numbers to remain distinguishable.
+The list has one primary **Status**: an invalid application's validation problem
+takes precedence over its build state. Preview and details provide the fuller
+context. Build labels are ✓ Up to date, • Needs build, ○ Not built, — Unavailable
+and ! Unknown.
+
+Routine inventory refresh uses metadata-based build-state hints instead of
+reading every source file's contents. Without matching evidence from an exact
+inspection, the state can remain Unknown. Even an Up to date browsing
+hint is not an exact content verification: a normal build still hashes inputs
+before deciding to skip packaging. See [build-state configuration](configuration.md#exact-build-decisions-versus-browsing-hints).
 
 Enter opens details with the human-readable name, canonical relative path,
 effective source/output, setup file, and install/uninstall command metadata.
@@ -75,7 +84,9 @@ The scriptable `inpakker doctor` command is unchanged.
 setup file and inherited defaults. Editing the directory name stops automatic
 slug updates. The optional Group field accepts an existing or new relative path,
 including nested groups; Ctrl+E completes a suggested existing group. Leave it
-empty for no group. In the Setup file field, type a relative filename to add
+empty for no group. The Group field, not the Applications list's current filter,
+determines where the application is created; verify the resolved location in
+Review application. In the Setup file field, type a relative filename to add
 later, or press F2 to select an existing installer (including MSI, EXE and scripts).
 The selected file will be copied into the new source folder; companion files
 are not copied automatically. Editing the setup filename clears the copy selection.
@@ -142,10 +153,12 @@ Cancellation displays “Cancelling…” until the worker has stopped. Complete
 build, validation and unpack results remain available afterward.
 
 Progress shows the current item (for example “4 of 4”), phase and completed count.
-Completion replaces progress with results inside a dialog, keeping the current
-page behind it. This applies to single and batch builds, validation and unpacking,
-as well as update and tool installation results. Success, failure, warning and
-active status text use distinct colors alongside their text/symbol labels.
+Successful routine operations return to the page with a quiet completion hint
+rather than requiring dismissal of a success dialog. Their results and logs
+remain available through **Last result** (`L`). Failures and cancellation retain
+result dialogs; update and tool installation feedback remains explicit. Success,
+failure, warning and active status text use distinct colors alongside their
+text/symbol labels.
 
 In batch results, Up/down selects an application and PgUp/PgDn scrolls the full
 details. In both single and batch application results, Enter opens the result
