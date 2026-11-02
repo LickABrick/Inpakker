@@ -1,6 +1,7 @@
 package buildcache
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -28,6 +29,15 @@ type fingerprintHeader struct {
 }
 
 func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath string) (string, error) {
+	return FingerprintContext(context.Background(), appPath, cfg, outputPath, utilityPath)
+}
+
+// FingerprintContext computes the authoritative content fingerprint. Cancellation
+// does not change the fingerprint format or allow metadata to replace file reads.
+func FingerprintContext(ctx context.Context, appPath string, cfg *types.AppConfig, outputPath, utilityPath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	utilityInfo, err := os.Stat(utilityPath)
 	if err != nil {
 		return "", fmt.Errorf("inspect packaging utility: %w", err)
@@ -37,7 +47,7 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 		return "", err
 	}
 	toolHash := sha256.New()
-	_, copyErr := io.Copy(toolHash, tool)
+	_, copyErr := io.Copy(toolHash, contextReader{ctx: ctx, reader: tool})
 	closeErr := tool.Close()
 	if copyErr != nil {
 		return "", copyErr
@@ -62,6 +72,9 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 	sourcePath := filepath.Join(appPath, pathutil.Native(cfg.SourceDirectory))
 	var paths []string
 	err = filepath.WalkDir(sourcePath, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -79,6 +92,9 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		relative, err := filepath.Rel(sourcePath, path)
 		if err != nil {
 			return "", fmt.Errorf("resolve source file path: %w", err)
@@ -99,7 +115,7 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 			return "", fmt.Errorf("open source file %q: %w", relative, err)
 		}
 		_ = binary.Write(hasher, binary.LittleEndian, uint64(info.Size()))
-		_, copyErr := io.Copy(hasher, file)
+		_, copyErr := io.Copy(hasher, contextReader{ctx: ctx, reader: file})
 		closeErr := file.Close()
 		if copyErr != nil {
 			return "", fmt.Errorf("hash source file %q: %w", relative, copyErr)
@@ -108,7 +124,22 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 			return "", fmt.Errorf("close source file %q: %w", relative, closeErr)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+type contextReader struct {
+	ctx context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func writeChunk(hasher hash.Hash, value []byte) {
