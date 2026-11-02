@@ -24,7 +24,7 @@ type noOpRunner struct{}
 
 func (noOpRunner) Run(context.Context, string, []string, io.Writer, io.Writer) error { return nil }
 
-func testWorkspace(t *testing.T) *workspace.Workspace {
+func testWorkspace(t testing.TB) *workspace.Workspace {
 	t.Helper()
 	t.Setenv("INPAKKER_HOME", t.TempDir())
 	root := t.TempDir()
@@ -188,7 +188,7 @@ func TestResponsiveApplicationColumns(t *testing.T) {
 	for _, test := range []struct {
 		width int
 		want  int
-	}{{120, 5}, {90, 4}, {70, 2}} {
+	}{{120, 3}, {90, 3}, {70, 2}} {
 		if got := len(applicationColumns(test.width)); got != test.want {
 			t.Errorf("applicationColumns(%d) = %d, want %d", test.width, got, test.want)
 		}
@@ -241,10 +241,12 @@ func TestBuildStateIsSeparateFromValidation(t *testing.T) {
 }
 
 func TestApplicationRowsRenderIndependentStatesAndPackageCount(t *testing.T) {
+	// Validation and package counts remain detail metadata, not extra table
+	// statuses. Invalid configuration takes precedence over the build hint.
 	valid := workspace.App{Status: "valid", Config: &types.AppConfig{Name: "Firefox"}, Packages: []string{"one", "two"}}
 	invalid := workspace.App{Status: "invalid", Config: &types.AppConfig{Name: "Reader"}}
 	wide := applicationRow(ApplicationView{App: valid, Group: "Browsers", Build: packager.BuildInspection{State: packager.BuildStateCurrent}}, 120)
-	if strings.Join(wide, "|") != "Firefox|Browsers|✓ Valid|✓ Up to date|2" {
+	if strings.Join(wide, "|") != "Firefox|Browsers|✓ Up to date" {
 		t.Fatalf("wide row = %#v", wide)
 	}
 	for _, state := range []packager.BuildState{packager.BuildStateNotBuilt, packager.BuildStateNeedsBuild} {
