@@ -113,6 +113,9 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		app := s.Workspace.InspectContext(ctx, ref)
 		result := Result{App: app}
 		emit(options, Event{Index: index + 1, Total: len(refs), App: app.Label(), Phase: "checking"})
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		if app.Status != "valid" {
 			result.Status, result.Err = StatusFailed, errors.New(app.Error)
 			results = append(results, result)
@@ -140,7 +143,13 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		if err != nil {
 			result.Status, result.Err = StatusFailed, err
 			results = append(results, result)
+			if ctx.Err() != nil {
+				return results, ctx.Err()
+			}
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return results, err
 		}
 		cacheKey := app.Config.ID
 		if !options.Force && cache != nil && cache.Current(cacheKey, fingerprint, ref.Path) {
@@ -170,6 +179,11 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 			"-o", outputPath,
 			"-q",
 		}, processOut, processErr)
+		// A runner may finish successfully just as cancellation is requested.
+		// Do not publish that operation as a successful cached build.
+		if err == nil {
+			err = ctx.Err()
+		}
 		if err != nil {
 			result.Status, result.Err = StatusFailed, fmt.Errorf("package application: %w", err)
 			results = append(results, result)
