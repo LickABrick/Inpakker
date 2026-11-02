@@ -81,6 +81,7 @@ func MetadataDigest(ctx context.Context, appPath string, cfg *types.AppConfig, o
 		if !pathutil.ValidRelative(relative) { return fmt.Errorf("invalid source path %q", relative) }
 		info, err := os.Lstat(path)
 		if err != nil { return err }
+		RecordSourceInfo(ctx)
 		if info.Mode()&os.ModeSymlink != 0 { return fmt.Errorf("source entry %q is a symbolic link; use regular source files", relative) }
 		if !info.Mode().IsRegular() { return fmt.Errorf("source entry %q is not a regular file", relative) }
 		data, err := json.Marshal(metadataFile{filepath.ToSlash(relative), info.Size(), info.ModTime().UnixNano(), uint32(info.Mode())})

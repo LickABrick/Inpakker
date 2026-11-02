@@ -74,7 +74,8 @@ func newFingerprinter(ctx context.Context, utilityPath string, open func(string)
 		return nil, err
 	}
 	toolHash := sha256.New()
-	_, copyErr := io.Copy(toolHash, contextReader{ctx: ctx, reader: tool})
+	n, copyErr := io.Copy(toolHash, contextReader{ctx: ctx, reader: tool})
+	RecordToolHash(ctx, n)
 	closeErr := tool.Close()
 	if copyErr != nil {
 		return nil, copyErr
@@ -171,7 +172,8 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, appPath string, cfg *ty
 			return "", fmt.Errorf("open source file %q: %w", relative, err)
 		}
 		_ = binary.Write(hasher, binary.LittleEndian, uint64(info.Size()))
-		_, copyErr := io.Copy(hasher, contextReader{ctx: ctx, reader: file})
+		n, copyErr := io.Copy(hasher, contextReader{ctx: ctx, reader: file})
+		RecordSourceHash(ctx, n)
 		closeErr := file.Close()
 		if copyErr != nil {
 			return "", fmt.Errorf("hash source file %q: %w", relative, copyErr)
