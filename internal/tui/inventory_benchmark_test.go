@@ -99,6 +99,7 @@ func benchmarkInventorySnapshot(b *testing.B, ctx context.Context, ws *workspace
 		}
 		views = append(views, ApplicationView{App: app, Group: filepath.Dir(app.Ref.Relative), Build: state})
 	}
+	_ = workspace.DiagnoseSnapshot(ws, apps)
 	return views
 }
 
