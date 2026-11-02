@@ -176,6 +176,7 @@ type resultRow struct {
 }
 
 type Model struct {
+	notification Notification
 	user               types.UserConfig
 	accessible         bool
 	opener             pathopener.PathOpener

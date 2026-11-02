@@ -349,8 +349,8 @@ func TestSuccessfulBuildShowsResultAndRefreshesState(t *testing.T) {
 		results: []packager.Result{{App: app.App, Status: packager.StatusBuilt, Artifacts: []string{"output/example.intunewin"}}},
 	})
 	model = updated.(Model)
-	if model.modal != ModalMessage || model.modalTitle != "Build complete" || !strings.Contains(model.modalBody, "packaged successfully") {
-		t.Fatalf("successful build result: title=%q body=%q", model.modalTitle, model.modalBody)
+	if model.modal != ModalNone || model.notification.Status != resultSuccess || model.notification.Text == "" {
+		t.Fatalf("successful build result: modal=%v notification=%#v", model.modal, model.notification)
 	}
 	if model.apps.all[0].Build.State != packager.BuildStateCurrent {
 		t.Fatalf("successful build did not refresh state: %#v", model.apps.all[0].Build)
