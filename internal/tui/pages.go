@@ -56,18 +56,7 @@ func previewLines(body string, width, height int) string {
 	return strings.Join(lines, "\n")
 }
 func (m Model) applicationPreview(app ApplicationView, width int) string {
-	lines := []string{m.theme.PanelTitle.Render(app.App.Label()), "", keyValue("Status", buildLabel(app.Build.State), 11), keyValue("Validation", validationLabel(app.App), 11), "Path", app.App.Ref.Relative}
-	if app.App.Config != nil {
-		cfg := app.App.Config
-		lines = append(lines, "", keyValue("Setup", cfg.SetupFile, 11), "Install command", metadataValue(cfg.InstallCommand), "Uninstall command", metadataValue(cfg.UninstallCommand))
-	}
-	if len(app.App.Packages) > 0 {
-		lines = append(lines, "Package", app.App.Packages[0])
-	}
-	if app.App.Error != "" {
-		lines = append(lines, "Validation issue", app.App.Error)
-	}
-	return ansi.Wrap(strings.Join(lines, "\n"), width, "")
+	return m.inventoryPreview(app, width)
 }
 
 func workspaceStatus(v workspace.RegistrationView) string {

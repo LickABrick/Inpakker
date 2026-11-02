@@ -60,6 +60,10 @@ func (m Model) notificationView() string {
 	if m.modal != ModalNone || m.operation != nil || m.notification.Text == "" {
 		return ""
 	}
-	text := ansi.Truncate("✓ "+m.notification.Text, max(1, m.width-4), "…")
-	return m.theme.StatusSuccess.Render(text)
+	prefix := "✓ "
+	style := m.theme.StatusSuccess
+	if m.notification.Status == resultFailed { prefix, style = "X ", m.theme.StatusError }
+	if m.notification.Status == resultCancelled { prefix, style = "! ", m.theme.StatusWarning }
+	text := ansi.Truncate(prefix+m.notification.Text, max(1, m.width-4), "…")
+	return style.Render(text)
 }

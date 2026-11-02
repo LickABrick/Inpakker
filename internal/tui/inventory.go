@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -55,14 +56,14 @@ func inspectApplications(ws *workspace.Workspace) ([]ApplicationView, error) {
 	if err != nil {
 		return nil, err
 	}
-	service := packager.Service{Workspace: ws}
+	inspection := (packager.Service{Workspace: ws}).NewInspectionContext(context.Background())
 	views := make([]ApplicationView, 0, len(apps))
 	for _, app := range apps {
 		group := filepath.Dir(app.Ref.Relative)
 		if group == "." {
 			group = "—"
 		}
-		views = append(views, ApplicationView{App: app, Group: group, Build: service.InspectBuildState(app.Ref)})
+		views = append(views, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(context.Background(), app, false)})
 	}
 	return views, nil
 }
@@ -239,6 +240,8 @@ func buildLabel(state packager.BuildState) string {
 	switch state {
 	case packager.BuildStateCurrent:
 		return "✓ Up to date"
+	case packager.BuildStateNeedsVerification:
+		return "! Verify state"
 	case packager.BuildStateNeedsBuild:
 		return "• Needs build"
 	case packager.BuildStateNotBuilt:

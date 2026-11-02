@@ -66,9 +66,14 @@ func (m Model) shellView() string {
 	contextLine := m.theme.WorkspaceBar.Width(width).Render(padBetween(ansi.Truncate(workspaceLabel, max(15, width-lipgloss.Width(workspaceRight)-6), "…"), workspaceRight, width-2))
 	separator := m.theme.HorizontalSeparator.Render(strings.Repeat("─", width))
 	contentWidth := max(20, inner-4)
-	page := lipgloss.NewStyle().Width(inner).Height(max(5, m.height-6)).Padding(0, 2).Render(m.pageView(contentWidth, max(5, m.height-6)))
+	pageHeight := max(5, m.height-6)
+	notice := m.notificationView()
+	if notice != "" { pageHeight-- }
+	page := lipgloss.NewStyle().Width(inner).Height(pageHeight).Padding(0, 2).Render(m.pageView(contentWidth, pageHeight))
 	footer := lipgloss.NewStyle().Width(width).Padding(0, 1).Render(m.footerView(width - 2))
-	return strings.Join([]string{top, contextLine, separator, page, separator, footer}, "\n")
+	parts := []string{top, contextLine, separator, page}
+	if notice != "" { parts = append(parts, "  "+notice) }
+	return strings.Join(append(parts, separator, footer), "\n")
 }
 
 func (m Model) pageView(width, height int) string {

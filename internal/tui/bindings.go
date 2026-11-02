@@ -227,6 +227,9 @@ func (m Model) dispatchPageKey(pressed tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m.updatePage(pressed)
 			}
 		}
+		if action := actionForCommand(b.Command); action != "" {
+			return m.ExecuteAction(action)
+		}
 		return m.updateGlobalKey(pressed)
 	}
 	return m, nil
