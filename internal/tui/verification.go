@@ -49,6 +49,10 @@ func (m Model) handleVerificationDone(msg verificationDoneMsg) (tea.Model, tea.C
  if !m.finishOperation(msg.id) { return m,nil }
  if m.workspace == nil || m.workspace.Config.ID != msg.workspaceID { return m,nil }
  m.apps.merge(msg.apps, "")
+ m.resultTitle = fmt.Sprintf("%d applications verified",len(msg.apps))
+ m.resultRows = make([]resultRow,0,len(msg.apps))
+ for _, app := range msg.apps { m.resultRows = append(m.resultRows,resultRow{Name:app.App.Label(),AppID:app.App.Ref.Relative,Status:buildLabel(app.Build.State),Detail:app.Build.Reason}) }
+ m.modalTitle = "Build-state verification"
  m.modal = ModalNone
  if msg.err != nil {
   if errors.Is(msg.err,context.Canceled) { m.notify(resultCancelled,"Build-state verification cancelled") } else { m.showError("Verification failed",msg.err) }
