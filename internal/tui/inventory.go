@@ -176,73 +176,40 @@ func (p applicationsPage) styledApplicationRow(app ApplicationView) table.Row {
 		}
 	}
 
-	validation := p.theme.StatusSuccess.Render(validationLabel(app.App))
-	if app.App.Status != "valid" {
-		validation = p.theme.StatusError.Render(validationLabel(app.App))
-	}
-	build := buildLabel(app.Build.State)
+	status := buildLabel(app.Build.State)
+	style := p.theme.TextMuted
 	switch app.Build.State {
 	case packager.BuildStateCurrent:
-		build = p.theme.StatusSuccess.Render(build)
+		style = p.theme.StatusSuccess
 	case packager.BuildStateNeedsBuild, packager.BuildStateUnknown:
-		build = p.theme.StatusWarning.Render(build)
+		style = p.theme.StatusWarning
 	case packager.BuildStateUnavailable:
-		build = p.theme.StatusMuted.Render(build)
-	default:
-		build = p.theme.TextMuted.Render(build)
+		style = p.theme.StatusMuted
 	}
-	switch {
-	case p.width >= 110:
-		row[2], row[3] = validation, build
-	case p.width >= 80:
-		if app.App.Status != "valid" {
-			row[2] = validation
-		} else {
-			row[2] = build
-		}
-	case app.App.Status != "valid":
-		row[1] = validation
-	default:
-		row[1] = build
+	if app.App.Status != "valid" {
+		status = validationLabel(app.App)
+		style = p.theme.StatusError
 	}
+	row[len(row)-1] = style.Render(status)
 	return row
 }
 
 func applicationColumns(width int) []table.Column {
-	switch {
-	case width >= 110:
-		usable := max(50, width-14)
-		return []table.Column{{Title: "APPLICATION", Width: max(20, usable-50)}, {Title: "GROUP", Width: 16}, {Title: "VALIDATION", Width: 12}, {Title: "BUILD", Width: 15}, {Title: "PACKAGE", Width: 7}}
-	case width >= 80:
-		usable := max(38, width-12)
-		return []table.Column{{Title: "APPLICATION", Width: max(18, usable-38)}, {Title: "GROUP", Width: 14}, {Title: "STATE", Width: 17}, {Title: "PACKAGE", Width: 7}}
-	default:
-		usable := max(35, width-8)
-		return []table.Column{{Title: "APPLICATION", Width: max(18, usable-17)}, {Title: "STATE", Width: 17}}
+	if width >= 80 {
+		return []table.Column{{Title: "APPLICATION", Width: max(1, width-39)}, {Title: "GROUP", Width: 14}, {Title: "STATUS", Width: 17}}
 	}
+	return []table.Column{{Title: "APPLICATION", Width: max(1, width-25)}, {Title: "STATUS", Width: 17}}
 }
 
 func applicationRow(app ApplicationView, width int) table.Row {
-	name := app.App.Label()
-	validation := validationLabel(app.App)
-	build := buildLabel(app.Build.State)
-	packages := packageCount(len(app.App.Packages))
-	switch {
-	case width >= 110:
-		return table.Row{name, app.Group, validation, build, packages}
-	case width >= 80:
-		state := build
-		if app.App.Status != "valid" {
-			state = validation
-		}
-		return table.Row{name, app.Group, state, packages}
-	default:
-		state := build
-		if app.App.Status != "valid" {
-			state = validation
-		}
-		return table.Row{name, state}
+	status := buildLabel(app.Build.State)
+	if app.App.Status != "valid" {
+		status = validationLabel(app.App)
 	}
+	if width >= 80 {
+		return table.Row{app.App.Label(), app.Group, status}
+	}
+	return table.Row{app.App.Label(), status}
 }
 
 func (p applicationsPage) selected() (ApplicationView, bool) {
