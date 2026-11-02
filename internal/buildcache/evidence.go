@@ -149,5 +149,8 @@ func (e *InspectionEvidence) Record(key string, before, after Metadata, fingerpr
 // interruptible and may complete if cancellation arrives during the write.
 func (e *InspectionEvidence) Save(ctx context.Context, stateDirectory string) error {
 	if err := ctx.Err(); err != nil { return err }
-	return atomicfile.JSON(filepath.Join(stateDirectory, EvidenceFileName), e, 0600)
+	snapshot := *e
+	snapshot.Schema = evidenceSchema
+	if snapshot.Apps == nil { snapshot.Apps = make(map[string]EvidenceEntry) }
+	return atomicfile.JSON(filepath.Join(stateDirectory, EvidenceFileName), &snapshot, 0600)
 }

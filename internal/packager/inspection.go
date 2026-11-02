@@ -15,6 +15,7 @@ type InspectionContext struct {
 	cache     *buildcache.Cache
 	cacheErr  error
 	toolErr   error
+	fingerprinter *buildcache.Fingerprinter
 	evidence  *buildcache.InspectionEvidence
 	directory string
 }
@@ -43,7 +44,8 @@ func (s Service) NewInspectionContext(ctx context.Context) *InspectionContext {
 
 // InspectBuildStateForApp never reloads application configuration. Fast mode is
 // a metadata-only hint and returns unknown when no matching deep evidence exists.
-// Deep mode always hashes source and tool contents; neither mode writes files.
+// Deep mode hashes every source and lazily hashes the tool once per inventory;
+// neither mode writes files.
 func (i *InspectionContext) InspectBuildStateForApp(ctx context.Context, app workspace.App, deep bool) BuildInspection {
 	return i.service.inspectAppBuildState(ctx, app, i, deep)
 }

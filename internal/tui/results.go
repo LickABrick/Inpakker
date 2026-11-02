@@ -52,7 +52,7 @@ func (m Model) rememberResult(updated tea.Model, cmd tea.Cmd) (tea.Model, tea.Cm
 	}
 	seen := make(map[string]bool)
 	for _, row := range r.rows {
-		if row.Failed && row.AppID != "" && !seen[row.AppID] {
+		if row.Outcome == resultFailed && row.AppID != "" && !seen[row.AppID] {
 			r.retryIDs = append(r.retryIDs, row.AppID)
 			seen[row.AppID] = true
 		}
@@ -74,7 +74,7 @@ func (m *Model) reopenResult() {
 	m.closeModal()
 	m.notification = Notification{Status: r.status, Summary: append([]resultCount(nil), r.counts...)}
 	m.modal, m.modalTitle, m.modalBody, m.modalErr = r.modal, r.title, r.body, r.err
-	m.resultRows, m.resultTitle, m.resultCursor = append([]resultRow(nil), r.rows...), r.summary, 0
+	m.resultRows, m.resultTitle, m.resultCursor = append([]resultRow(nil), r.rows...), r.summary, firstFailedRow(r.rows)
 	m.setLog(r.logTitle, r.log)
 	m.modalHasLog = r.log != ""
 	m.modalViewport.GotoTop()
@@ -137,6 +137,19 @@ func (m Model) retryFailed() (tea.Model, tea.Cmd) {
 		return m.unpackTargets(targets, r.packagePath == "", r.packagePath)
 	}
 	return m, nil
+}
+
+func firstFailedRow(rows []resultRow) int {
+	for i, row := range rows {
+		if row.Outcome == resultFailed { return i }
+	}
+	return 0
+}
+
+// operationTargets captures the original request before completion unlocks it.
+func (m Model) operationTargets(id int) []ApplicationView {
+	if m.operation == nil || m.operation.id != id { return nil }
+	return m.operation.targets
 }
 
 // resultAppID resolves against the current inventory before exposing navigation.

@@ -108,6 +108,8 @@ type inventoryMsg struct {
 }
 
 type createMsg struct {
+	workspaceID string
+	generation int
 	ref          workspace.AppRef
 	apps         []ApplicationView
 	err          error
@@ -173,7 +175,7 @@ type resultRow struct {
 	Detail    string
 	AppID     string
 	OutputDir string
-	Failed    bool
+	Outcome   resultStatus
 }
 
 type Model struct {
@@ -387,6 +389,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case verificationDoneMsg:
 		return m.handleVerificationDone(msg)
 	case createMsg:
+		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation { return m, nil }
 		if msg.err != nil {
 			m.showCreateReview()
 			m.modalErr = msg.err

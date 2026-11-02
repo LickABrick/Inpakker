@@ -45,13 +45,14 @@ func (m *Model) presentResult(title string, status resultStatus) {
 	m.notification.Status = status
 	m.notification.Text = ""
 	if status == resultSuccess {
-		m.notification.Text = title + ": " + m.resultTitle + " · Last Result for details"
+		m.notification.Text = m.resultTitle
 		m.modal = ModalNone
 		// Preserve the inspectable result metadata even though it is not opened.
 		m.modalTitle, m.modalBody, m.modalErr = title, "", nil
 		return
 	}
 	m.showResults(title)
+	m.resultCursor = firstFailedRow(m.resultRows)
 }
 
 // notificationView is render-only. The page renderer can place this immediately

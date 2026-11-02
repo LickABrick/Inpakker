@@ -35,33 +35,89 @@ func Fingerprint(appPath string, cfg *types.AppConfig, outputPath, utilityPath s
 // FingerprintContext computes the authoritative content fingerprint. Cancellation
 // does not change the fingerprint format or allow metadata to replace file reads.
 func FingerprintContext(ctx context.Context, appPath string, cfg *types.AppConfig, outputPath, utilityPath string) (string, error) {
-	if err := ctx.Err(); err != nil {
+	f, err := NewFingerprinter(ctx, utilityPath)
+	if err != nil {
 		return "", err
+	}
+	return f.Fingerprint(ctx, appPath, cfg, outputPath)
+}
+
+// Fingerprinter holds one authoritative utility identity for a single build or
+// inventory operation. Discard it afterwards so the next operation rehashes the
+// tool. Source contents are always hashed independently for every application.
+// Each application rechecks tool size/mtime and rehashes on change. A concurrent
+// same-size/same-mtime tool edit retains the initially observed identity until
+// the next operation. Fingerprinter is not safe for concurrent use.
+type Fingerprinter struct {
+	utilityPath string
+	utilitySize int64
+	utilityModified int64
+	utilitySHA256 string
+	openTool func(string) (io.ReadCloser, error)
+}
+
+// NewFingerprinter reads and hashes the packaging utility exactly once.
+func NewFingerprinter(ctx context.Context, utilityPath string) (*Fingerprinter, error) {
+	return newFingerprinter(ctx, utilityPath, func(path string) (io.ReadCloser, error) { return os.Open(path) })
+}
+
+func newFingerprinter(ctx context.Context, utilityPath string, open func(string) (io.ReadCloser, error)) (*Fingerprinter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	utilityInfo, err := os.Stat(utilityPath)
 	if err != nil {
-		return "", fmt.Errorf("inspect packaging utility: %w", err)
+		return nil, fmt.Errorf("inspect packaging utility: %w", err)
 	}
-	tool, err := os.Open(utilityPath)
+	tool, err := open(utilityPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	toolHash := sha256.New()
 	_, copyErr := io.Copy(toolHash, contextReader{ctx: ctx, reader: tool})
 	closeErr := tool.Close()
 	if copyErr != nil {
-		return "", copyErr
+		return nil, copyErr
 	}
 	if closeErr != nil {
-		return "", closeErr
+		return nil, closeErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &Fingerprinter{
+		utilityPath: filepath.Clean(utilityPath),
+		utilitySize: utilityInfo.Size(),
+		utilityModified: utilityInfo.ModTime().UnixNano(),
+		utilitySHA256: hex.EncodeToString(toolHash.Sum(nil)),
+		openTool: open,
+	}, nil
+}
+
+// Fingerprint hashes an application's source using the captured tool identity.
+// Its digest format is exactly the same as the standalone Fingerprint function.
+func (f *Fingerprinter) Fingerprint(ctx context.Context, appPath string, cfg *types.AppConfig, outputPath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	info, err := os.Stat(f.utilityPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect packaging utility: %w", err)
+	}
+	if info.Size() != f.utilitySize || info.ModTime().UnixNano() != f.utilityModified {
+		updated, err := newFingerprinter(ctx, f.utilityPath, f.openTool)
+		if err != nil {
+			return "", err
+		}
+		*f = *updated
 	}
 	header, err := json.Marshal(fingerprintHeader{
 		Schema:          currentSchema,
 		Config:          *cfg,
-		UtilityPath:     filepath.Clean(utilityPath),
-		UtilitySize:     utilityInfo.Size(),
-		UtilityModified: utilityInfo.ModTime().UnixNano(),
-		UtilitySHA256:   hex.EncodeToString(toolHash.Sum(nil)),
+		UtilityPath:     f.utilityPath,
+		UtilitySize:     f.utilitySize,
+		UtilityModified: f.utilityModified,
+		UtilitySHA256:   f.utilitySHA256,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode build inputs: %w", err)

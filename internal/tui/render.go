@@ -364,11 +364,24 @@ func (m Model) resultRowView(index int) string {
 		prefix = "› "
 	}
 	heading := m.theme.Text.Bold(index == m.resultCursor).Render(ansi.Wrap(prefix+row.Name, width, ""))
-	body := heading + "\n" + m.styleStatus(row.Status)
+	body := heading + "\n" + m.styleResultStatus(row)
 	if row.Detail != "" {
 		body += "\n" + m.theme.TextMuted.Render(ansi.Wrap(row.Detail, width, ""))
 	}
 	return body
+}
+
+func (m Model) styleResultStatus(row resultRow) string {
+	style := m.theme.Text
+	switch row.Outcome {
+	case resultSuccess:
+		style = m.theme.StatusSuccess
+	case resultFailed:
+		style = m.theme.StatusError
+	case resultCancelled:
+		style = m.theme.StatusWarning
+	}
+	return style.Render(row.Status)
 }
 
 func (m Model) resultOffset() int {

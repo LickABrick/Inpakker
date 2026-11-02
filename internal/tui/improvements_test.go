@@ -162,7 +162,7 @@ func TestResultActionsUseOriginalTargetsAndBuildOptions(t *testing.T) {
 	msg := operationWorker(t, cmd)()
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
-	if len(m.resultRows) != 1 || m.resultRows[0].AppID != apps[1].App.Ref.Relative || m.resultRows[0].Failed {
+	if len(m.resultRows) != 1 || m.resultRows[0].AppID != apps[1].App.Ref.Relative || m.resultRows[0].Outcome == resultFailed {
 		t.Fatal("retry did not build only the failed app", m.resultRows)
 	}
 }

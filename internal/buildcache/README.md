@@ -5,6 +5,17 @@ content fingerprint algorithm, artifact checks and build-skip semantics are
 unchanged. `FingerprintContext` computes the same fingerprint as `Fingerprint`,
 with cancellation checks during traversal and content reads.
 
+For a multi-application operation, create `NewFingerprinter(ctx, utilityPath)`
+then call its `Fingerprint(ctx, appPath, effectiveConfig, outputPath)` method for
+each application. This hashes the utility once and preserves the exact original
+header bytes and digest format. Each application rechecks utility size/mtime and
+rehashes it if either changed. A same-size/same-mtime tool mutation during the
+operation retains the initially observed identity; the next operation always
+rehashes it. The instance is not safe for concurrent use. Scope it to one
+build/inventory operation, never
+reuse it across refreshes, and create it only when caching is enabled. Every
+application's source contents are still hashed independently.
+
 `inspection-evidence.json` is separate, disposable, versioned machine-local
 inspection state. Pass the same user-local workspace state directory used for
 the build cache to `LoadEvidence` and `InspectionEvidence.Save`. Do not store it

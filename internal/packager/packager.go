@@ -94,6 +94,7 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 		return nil, err
 	}
 	var cache *buildcache.Cache
+	var fingerprinter *buildcache.Fingerprinter
 	if !options.NoCache {
 		cache, err = buildcache.Load(cacheDirectory)
 		if err != nil {
@@ -129,7 +130,12 @@ func (s Service) Build(ctx context.Context, refs []workspace.AppRef, options Bui
 			before, _ = buildcache.MetadataDigest(ctx, ref.Path, &app.Effective.AppConfig, outputPath, s.utilityPath())
 		}
 		if cache != nil {
-			fingerprint, err = buildcache.FingerprintContext(ctx, ref.Path, &app.Effective.AppConfig, outputPath, s.utilityPath())
+			if fingerprinter == nil {
+				fingerprinter, err = buildcache.NewFingerprinter(ctx, s.utilityPath())
+			}
+			if err == nil {
+				fingerprint, err = fingerprinter.Fingerprint(ctx, ref.Path, &app.Effective.AppConfig, outputPath)
+			}
 		}
 		if err != nil {
 			result.Status, result.Err = StatusFailed, err
@@ -256,7 +262,12 @@ func (s Service) inspectAppBuildState(ctx context.Context, app workspace.App, in
 	before, metadataErr := buildcache.MetadataDigest(ctx, ref.Path, &app.Effective.AppConfig, outputPath, utility)
 	var fingerprint string
 	if deep {
-		fingerprint, err = buildcache.FingerprintContext(ctx, ref.Path, &app.Effective.AppConfig, outputPath, utility)
+		if inspection.fingerprinter == nil {
+			inspection.fingerprinter, err = buildcache.NewFingerprinter(ctx, utility)
+		}
+		if err == nil {
+			fingerprint, err = inspection.fingerprinter.Fingerprint(ctx, ref.Path, &app.Effective.AppConfig, outputPath)
+		}
 		if err != nil {
 			return BuildInspection{State: BuildStateUnknown, Reason: err.Error()}
 		}
@@ -273,8 +284,12 @@ func (s Service) inspectAppBuildState(ctx context.Context, app workspace.App, in
 		var ok bool
 		fingerprint, ok = inspection.evidence.Lookup(key, before)
 		if !ok {
-			if _, built := cache.Get(key); !built {
+			entry, built := cache.Get(key)
+			if !built {
 				return BuildInspection{State: BuildStateNotBuilt, Reason: "no successful cached build"}
+			}
+			if !cache.Current(key, entry.Fingerprint, ref.Path) {
+				return BuildInspection{State: BuildStateNeedsBuild, Reason: "recorded build output is missing"}
 			}
 			return BuildInspection{State: BuildStateNeedsVerification, Reason: "input metadata changed or deep inspection required"}
 		}

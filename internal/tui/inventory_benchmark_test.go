@@ -33,6 +33,14 @@ func benchmarkInventory(b *testing.B, count int) (*workspace.Workspace, int64) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	// Include a realistically sized installer without multiplying disk usage by
+	// the entire inventory size. This file is included in every deep scan.
+	if len(apps) == 0 {
+		b.Fatal("empty fixture")
+	}
+	if err := os.WriteFile(filepath.Join(apps[0].Ref.Path, "source", "payload.bin"), make([]byte, 4*1024*1024), 0o600); err != nil {
+		b.Fatal(err)
+	}
 	directory, err := ws.CacheDirectory()
 	if err != nil {
 		b.Fatal(err)
@@ -73,12 +81,11 @@ func benchmarkInventory(b *testing.B, count int) (*workspace.Workspace, int64) {
 	if err := cache.Save(directory); err != nil {
 		b.Fatal(err)
 	}
-	return ws, sourceBytes
+	return ws, sourceBytes + 4*1024*1024
 }
 
-func benchmarkInventorySnapshot(b *testing.B, ws *workspace.Workspace, deep bool) []ApplicationView {
+func benchmarkInventorySnapshot(b *testing.B, ctx context.Context, ws *workspace.Workspace, deep bool) []ApplicationView {
 	b.Helper()
-	ctx := context.Background()
 	apps, _, err := ws.ListWithGroups(ctx)
 	if err != nil {
 		b.Fatal(err)
@@ -131,24 +138,24 @@ func BenchmarkInventorySnapshots(b *testing.B) {
 						}
 					}
 					deep := mode == "authoritative"
+					metrics := &buildcache.Metrics{}
+					measured := buildcache.WithMetrics(ctx, metrics)
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						benchmarkInventorySnapshot(b, ws, deep)
+						benchmarkInventorySnapshot(b, measured, ws, deep)
 					}
 					b.StopTimer()
-					// These are logical workload metrics, NOT OS read calls or I/O
-					// instrumentation. Sizes come from the actual fixture files.
-					// Fast inspection only reads source metadata. Authoritative
-					// inspection hashes every source file once; tool/config/cache
-					// reads are deliberately excluded from these source-only metrics.
+					// Fixture size is a workload metric; all work counters below
+					// come from the actual metadata/content-copy sites. Hashes
+					// count files, not operating-system read syscalls.
 					b.ReportMetric(float64(sourceBytes), "logical-source-bytes/op")
-					readBytes, contentReads := int64(0), 0
-					if deep {
-						readBytes, contentReads = sourceBytes, count
-					}
-					b.ReportMetric(float64(readBytes), "logical-source-read-bytes/op")
-					b.ReportMetric(float64(contentReads), "logical-source-content-reads/op")
+					n := float64(b.N)
+					b.ReportMetric(float64(metrics.SourceBytes.Load())/n, "source-hash-bytes/op")
+					b.ReportMetric(float64(metrics.SourceHashes.Load())/n, "source-hashes/op")
+					b.ReportMetric(float64(metrics.ToolBytes.Load())/n, "tool-hash-bytes/op")
+					b.ReportMetric(float64(metrics.ToolHashes.Load())/n, "tool-hashes/op")
+					b.ReportMetric(float64(metrics.SourceFileInfos.Load())/n, "source-file-infos/op")
 				})
 			}
 		})
@@ -159,7 +166,7 @@ func BenchmarkInventoryTableRender(b *testing.B) {
 	for _, count := range []int{10, 100, 500} {
 		b.Run(fmt.Sprintf("apps-%d", count), func(b *testing.B) {
 			ws, _ := benchmarkInventory(b, count)
-			views := benchmarkInventorySnapshot(b, ws, false)
+			views := benchmarkInventorySnapshot(b, context.Background(), ws, false)
 			for _, width := range []int{60, 90, 120} {
 				b.Run(fmt.Sprintf("width-%d", width), func(b *testing.B) {
 					for _, rebuild := range []bool{false, true} {
