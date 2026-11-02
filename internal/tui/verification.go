@@ -38,6 +38,10 @@ func (m *Model) verifyBuildStatesCmd() tea.Cmd {
 			emitActivity(op, activityEvent{current: index + 1, completed: index, total: len(targets), label: target.App.Label(), phase: "verifying"})
 			target.App = ws.InspectContext(op.context, target.App.Ref)
 			target.Build = inspection.InspectBuildStateForApp(op.context, target.App, true)
+			if target.Build.State == packager.BuildStateUnknown || target.Build.State == packager.BuildStateUnavailable {
+				err = fmt.Errorf("verify %s: %s", target.App.Label(), target.Build.Reason)
+				break
+			}
 			if err = op.context.Err(); err != nil {
 				break
 			}
@@ -72,6 +76,7 @@ func (m Model) handleVerificationDone(msg verificationDoneMsg) (tea.Model, tea.C
 		if errors.Is(msg.err, context.Canceled) {
 			m.notify(resultCancelled, "Build-state verification cancelled")
 		} else {
+			m.notification = Notification{Status: resultFailed}
 			m.showError("Verification failed", msg.err)
 		}
 	} else {
