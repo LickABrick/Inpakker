@@ -391,6 +391,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case createMsg:
 		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation { return m, nil }
 		if msg.err != nil {
+			if m.create.SetupFrom == "" {
+				cmd := m.beginCreateForm()
+				m.formError = msg.err
+				m.form.WithHeight(m.formHeight())
+				return m, cmd
+			}
 			m.showCreateReview()
 			m.modalErr = msg.err
 			return m, nil
