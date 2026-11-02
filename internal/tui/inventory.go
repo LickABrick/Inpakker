@@ -20,14 +20,17 @@ type ApplicationView struct {
 }
 
 type applicationsPage struct {
-	table     table.Model
-	search    textinput.Model
-	theme     Theme
-	all       []ApplicationView
-	filtered  []ApplicationView
-	searching bool
-	width     int
-	height    int
+	table       table.Model
+	search      textinput.Model
+	theme       Theme
+	all         []ApplicationView
+	filtered    []ApplicationView
+	searching   bool
+	searchCache []string
+	nameCounts  map[string]int
+	positions   map[string]int
+	width       int
+	height      int
 }
 
 func newApplicationsPage(theme Theme) applicationsPage {
@@ -98,6 +101,16 @@ func (p *applicationsPage) refresh(apps []ApplicationView, preferredID string) {
 		}
 	}
 	p.all = append([]ApplicationView(nil), apps...)
+	// Build immutable search and identity indexes once per inventory snapshot,
+	// not once per filter keystroke or once per rendered row.
+	p.searchCache = make([]string, len(p.all))
+	p.nameCounts = make(map[string]int, len(p.all))
+	p.positions = make(map[string]int, len(p.all))
+	for i, app := range p.all {
+		p.searchCache[i] = searchText(app)
+		p.nameCounts[app.App.Label()]++
+		p.positions[app.App.Ref.Relative] = i + 1
+	}
 	p.applyFilter(preferredID)
 }
 
@@ -111,11 +124,7 @@ func (p *applicationsPage) applyFilter(preferredID string) {
 	if query == "" {
 		p.filtered = append([]ApplicationView(nil), p.all...)
 	} else {
-		candidates := make([]string, len(p.all))
-		for i, app := range p.all {
-			candidates[i] = searchText(app)
-		}
-		matches := matchIndices(query, candidates)
+		matches := matchIndices(query, p.searchCache)
 		p.filtered = make([]ApplicationView, 0, len(matches))
 		for _, match := range matches {
 			p.filtered = append(p.filtered, p.all[match])
@@ -156,17 +165,8 @@ func (p *applicationsPage) rebuildTable() {
 func (p applicationsPage) styledApplicationRow(app ApplicationView) table.Row {
 	row := applicationRow(app, p.width)
 	if p.width < 80 {
-		count, index := 0, 0
-		for i, other := range p.all {
-			if other.App.Label() == app.App.Label() {
-				count++
-			}
-			if other.App.Ref.Relative == app.App.Ref.Relative {
-				index = i + 1
-			}
-		}
-		if count > 1 {
-			prefix := fmt.Sprintf("%d · ", index)
+		if p.nameCounts[app.App.Label()] > 1 {
+			prefix := fmt.Sprintf("%d · ", p.positions[app.App.Ref.Relative])
 			path := app.App.Ref.Relative
 			available := max(1, applicationColumns(p.width)[0].Width-ansi.StringWidth(prefix))
 			if ansi.StringWidth(path) > available {

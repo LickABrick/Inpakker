@@ -398,10 +398,13 @@ func (m *Model) prepareModalViewport() {
 			}
 			summary[i] = style.Render(count)
 		}
-		body = strings.Join(summary, " · ")
+		var results strings.Builder
+		results.WriteString(strings.Join(summary, " · "))
 		for i := range m.resultRows {
-			body += "\n\n" + m.resultRowView(i)
+			results.WriteString("\n\n")
+			results.WriteString(m.resultRowView(i))
 		}
+		body = results.String()
 	}
 	body = ansi.Wrap(body, width, "")
 	helpHeight := 1
