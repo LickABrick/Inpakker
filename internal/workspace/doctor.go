@@ -27,6 +27,17 @@ func Diagnose(root string) []Check {
 	if err != nil {
 		return []Check{{Name: "Workspace configuration", Status: CheckFailure, Detail: err.Error()}}
 	}
+	apps, listErr := ws.List()
+	return ws.DiagnoseApps(apps, listErr)
+}
+
+// DiagnoseApps uses an already loaded inventory rather than scanning applications
+// again. listErr preserves inventory failures in the diagnostic result.
+func DiagnoseSnapshot(ws *Workspace, apps []App) []Check {
+	return ws.DiagnoseApps(apps, nil)
+}
+
+func (ws *Workspace) DiagnoseApps(apps []App, listErr error) []Check {
 	checks := []Check{{Name: "Workspace configuration", Status: CheckOK, Detail: filepath.Join(ws.Root, ConfigFile)}}
 	if info, err := os.Stat(ws.AppsDir()); err != nil || !info.IsDir() {
 		checks = append(checks, Check{Name: "Applications directory", Status: CheckFailure, Detail: errorDetail(err, "path is not a directory")})
@@ -36,9 +47,8 @@ func Diagnose(root string) []Check {
 	checks = append(checks, executableCheck("Content Prep Tool", ws.User.Tools.ContentPrepTool.Path, false))
 	checks = append(checks, executableCheck("Package decoder · Optional", ws.User.Tools.Decoder.Path, true))
 	checks = append(checks, Check{Name: "Inpakker configuration", Status: CheckOK, Detail: "Global user settings"})
-	apps, err := ws.List()
-	if err != nil {
-		checks = append(checks, Check{Name: "Applications", Status: CheckFailure, Detail: err.Error()})
+	if listErr != nil {
+		checks = append(checks, Check{Name: "Applications", Status: CheckFailure, Detail: listErr.Error()})
 		return checks
 	}
 	if len(apps) == 0 {
