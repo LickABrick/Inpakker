@@ -63,6 +63,7 @@ const (
 	operationUnpack
 	operationUpdate
 	operationTool
+	operationVerify
 )
 
 type operationState struct {
@@ -107,6 +108,8 @@ type inventoryMsg struct {
 }
 
 type createMsg struct {
+	workspaceID  string
+	generation   int
 	ref          workspace.AppRef
 	apps         []ApplicationView
 	err          error
@@ -172,16 +175,18 @@ type resultRow struct {
 	Detail    string
 	AppID     string
 	OutputDir string
-	Failed    bool
+	Outcome   resultStatus
 }
 
 type Model struct {
+	notification       Notification
 	user               types.UserConfig
 	accessible         bool
 	opener             pathopener.PathOpener
 	groups             []string
 	generation         int
 	refreshing         bool
+	refreshRequests    *refreshCoordinator
 	detecting          bool
 	checkingUpdate     bool
 	updateError        error
@@ -309,7 +314,7 @@ func New(ctx context.Context, root string, ws *workspace.Workspace, runner proce
 	helpView := viewport.New(viewport.WithWidth(54), viewport.WithHeight(12))
 	m := Model{
 		user: *user, accessible: os.Getenv("INPAKKER_ACCESSIBLE") == "1" || os.Getenv("ACCESSIBLE") == "1", opener: pathopener.Explorer{}, workspaceSearch: textinput.New(), generation: 1, refreshing: ws != nil, detecting: true, checkingUpdate: updateService != nil,
-		ctx: ctx, root: absRoot, workspace: ws, runner: runner, updater: updateService, version: version,
+		ctx: ctx, root: absRoot, workspace: ws, runner: runner, updater: updateService, version: version, refreshRequests: &refreshCoordinator{},
 		automaticUpdates: updateService != nil,
 		theme:            theme, keys: DefaultKeyMap(), help: helpModel, apps: appPage,
 		routes: []Route{{Kind: RouteApplications}}, spinner: activitySpinner, progress: bar,
@@ -376,13 +381,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.groups = msg.groups
 		m.diagnostics = msg.checks
 		if msg.err != nil {
-			m.showError("Refresh failed", msg.err)
+			if !errors.Is(msg.err, context.Canceled) {
+				m.notification = Notification{Status: resultFailed, Text: "Refresh failed: " + msg.err.Error()}
+			}
 			return m, nil
 		}
 		m.apps.refresh(msg.apps, msg.preferred)
 		return m, nil
+	case verificationDoneMsg:
+		return m.rememberResult(m.handleVerificationDone(msg))
 	case createMsg:
+		if m.workspace == nil || msg.workspaceID != m.workspace.Config.ID || msg.generation != m.generation {
+			return m, nil
+		}
 		if msg.err != nil {
+			if m.create.SetupFrom == "" {
+				cmd := m.beginCreateForm()
+				m.formError = msg.err
+				m.form.WithHeight(m.formHeight())
+				return m, cmd
+			}
 			m.showCreateReview()
 			m.modalErr = msg.err
 			return m, nil
@@ -392,8 +410,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showError("Application created, but inventory refresh failed", msg.inventoryErr)
 			return m, nil
 		}
-		m.apps.refresh(msg.apps, msg.ref.Relative)
-		m.showMessage("Application created", "✓ "+msg.ref.Relative+" was created successfully.")
+		m.apps.merge(msg.apps, msg.ref.Relative)
+		m.modal = ModalNone
+		m.notify(NotificationSuccess, msg.ref.Relative+" created")
 		return m, nil
 	case updateCheckMsg:
 		m.checkingUpdate = false
@@ -774,8 +793,7 @@ func (m Model) completeForm(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		m.create.Name = m.form.GetString("name")
 		m.create.DirectoryName = m.form.GetString("directory")
 		m.create.SetupFile = m.form.GetString("setup")
-		m.showCreateReview()
-		return m, formCmd
+		return m.completeCreateDraft(formCmd)
 	case ModalWorkspaceForm, ModalSetting, ModalTool:
 		return m.completeManagerForm(formCmd)
 
@@ -903,7 +921,7 @@ func (m Model) targetApplications(all bool) ([]ApplicationView, error) {
 func (m *Model) openDiagnostics() { m.pushRoute(Route{Kind: RouteDiagnostics}) }
 
 func (m *Model) refreshCmd(preferred string) tea.Cmd {
-	if m.workspace == nil || m.refreshing {
+	if m.workspace == nil {
 		return nil
 	}
 	m.generation++
@@ -912,16 +930,39 @@ func (m *Model) refreshCmd(preferred string) tea.Cmd {
 }
 func (m Model) inventoryCmd(preferred string) tea.Cmd {
 	ws, generation := m.workspace, m.generation
+	requests := m.refreshRequests
+	if requests == nil {
+		requests = &refreshCoordinator{}
+	}
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := requests.request(parent)
 	return func() tea.Msg {
 		if ws == nil {
 			return nil
 		}
-		apps, err := inspectApplications(ws)
-		groups, groupErr := ws.Groups()
-		if err == nil {
-			err = groupErr
+		requests.worker.Lock()
+		defer requests.worker.Unlock()
+		if err := ctx.Err(); err != nil {
+			return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, err: err}
 		}
-		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: apps, groups: groups, checks: workspace.Diagnose(ws.Root), preferred: preferred, err: err}
+		apps, groups, err := ws.ListWithGroups(ctx)
+		views := make([]ApplicationView, 0, len(apps))
+		inspection := (packager.Service{Workspace: ws}).NewInspectionContext(ctx)
+		for _, app := range apps {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				break
+			}
+			group := filepath.Dir(app.Ref.Relative)
+			if group == "." {
+				group = "—"
+			}
+			views = append(views, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(ctx, app, false)})
+		}
+		return inventoryMsg{generation: generation, workspaceID: ws.Config.ID, apps: views, groups: groups, checks: ws.DiagnoseApps(apps, err), preferred: preferred, err: err}
 	}
 }
 

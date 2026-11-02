@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -20,14 +21,17 @@ type ApplicationView struct {
 }
 
 type applicationsPage struct {
-	table     table.Model
-	search    textinput.Model
-	theme     Theme
-	all       []ApplicationView
-	filtered  []ApplicationView
-	searching bool
-	width     int
-	height    int
+	table       table.Model
+	search      textinput.Model
+	theme       Theme
+	all         []ApplicationView
+	filtered    []ApplicationView
+	searching   bool
+	searchCache []string
+	nameCounts  map[string]int
+	positions   map[string]int
+	width       int
+	height      int
 }
 
 func newApplicationsPage(theme Theme) applicationsPage {
@@ -52,14 +56,14 @@ func inspectApplications(ws *workspace.Workspace) ([]ApplicationView, error) {
 	if err != nil {
 		return nil, err
 	}
-	service := packager.Service{Workspace: ws}
+	inspection := (packager.Service{Workspace: ws}).NewInspectionContext(context.Background())
 	views := make([]ApplicationView, 0, len(apps))
 	for _, app := range apps {
 		group := filepath.Dir(app.Ref.Relative)
 		if group == "." {
 			group = "—"
 		}
-		views = append(views, ApplicationView{App: app, Group: group, Build: service.InspectBuildState(app.Ref)})
+		views = append(views, ApplicationView{App: app, Group: group, Build: inspection.InspectBuildStateForApp(context.Background(), app, false)})
 	}
 	return views, nil
 }
@@ -98,6 +102,16 @@ func (p *applicationsPage) refresh(apps []ApplicationView, preferredID string) {
 		}
 	}
 	p.all = append([]ApplicationView(nil), apps...)
+	// Build immutable search and identity indexes once per inventory snapshot,
+	// not once per filter keystroke or once per rendered row.
+	p.searchCache = make([]string, len(p.all))
+	p.nameCounts = make(map[string]int, len(p.all))
+	p.positions = make(map[string]int, len(p.all))
+	for i, app := range p.all {
+		p.searchCache[i] = searchText(app)
+		p.nameCounts[app.App.Label()]++
+		p.positions[app.App.Ref.Relative] = i + 1
+	}
 	p.applyFilter(preferredID)
 }
 
@@ -111,11 +125,7 @@ func (p *applicationsPage) applyFilter(preferredID string) {
 	if query == "" {
 		p.filtered = append([]ApplicationView(nil), p.all...)
 	} else {
-		candidates := make([]string, len(p.all))
-		for i, app := range p.all {
-			candidates[i] = searchText(app)
-		}
-		matches := matchIndices(query, candidates)
+		matches := matchIndices(query, p.searchCache)
 		p.filtered = make([]ApplicationView, 0, len(matches))
 		for _, match := range matches {
 			p.filtered = append(p.filtered, p.all[match])
@@ -156,17 +166,8 @@ func (p *applicationsPage) rebuildTable() {
 func (p applicationsPage) styledApplicationRow(app ApplicationView) table.Row {
 	row := applicationRow(app, p.width)
 	if p.width < 80 {
-		count, index := 0, 0
-		for i, other := range p.all {
-			if other.App.Label() == app.App.Label() {
-				count++
-			}
-			if other.App.Ref.Relative == app.App.Ref.Relative {
-				index = i + 1
-			}
-		}
-		if count > 1 {
-			prefix := fmt.Sprintf("%d · ", index)
+		if p.nameCounts[app.App.Label()] > 1 {
+			prefix := fmt.Sprintf("%d · ", p.positions[app.App.Ref.Relative])
 			path := app.App.Ref.Relative
 			available := max(1, applicationColumns(p.width)[0].Width-ansi.StringWidth(prefix))
 			if ansi.StringWidth(path) > available {
@@ -176,73 +177,40 @@ func (p applicationsPage) styledApplicationRow(app ApplicationView) table.Row {
 		}
 	}
 
-	validation := p.theme.StatusSuccess.Render(validationLabel(app.App))
-	if app.App.Status != "valid" {
-		validation = p.theme.StatusError.Render(validationLabel(app.App))
-	}
-	build := buildLabel(app.Build.State)
+	status := buildLabel(app.Build.State)
+	style := p.theme.TextMuted
 	switch app.Build.State {
 	case packager.BuildStateCurrent:
-		build = p.theme.StatusSuccess.Render(build)
+		style = p.theme.StatusSuccess
 	case packager.BuildStateNeedsBuild, packager.BuildStateUnknown:
-		build = p.theme.StatusWarning.Render(build)
+		style = p.theme.StatusWarning
 	case packager.BuildStateUnavailable:
-		build = p.theme.StatusMuted.Render(build)
-	default:
-		build = p.theme.TextMuted.Render(build)
+		style = p.theme.StatusMuted
 	}
-	switch {
-	case p.width >= 110:
-		row[2], row[3] = validation, build
-	case p.width >= 80:
-		if app.App.Status != "valid" {
-			row[2] = validation
-		} else {
-			row[2] = build
-		}
-	case app.App.Status != "valid":
-		row[1] = validation
-	default:
-		row[1] = build
+	if app.App.Status != "valid" {
+		status = validationLabel(app.App)
+		style = p.theme.StatusError
 	}
+	row[len(row)-1] = style.Render(status)
 	return row
 }
 
 func applicationColumns(width int) []table.Column {
-	switch {
-	case width >= 110:
-		usable := max(50, width-14)
-		return []table.Column{{Title: "APPLICATION", Width: max(20, usable-50)}, {Title: "GROUP", Width: 16}, {Title: "VALIDATION", Width: 12}, {Title: "BUILD", Width: 15}, {Title: "PACKAGE", Width: 7}}
-	case width >= 80:
-		usable := max(38, width-12)
-		return []table.Column{{Title: "APPLICATION", Width: max(18, usable-38)}, {Title: "GROUP", Width: 14}, {Title: "STATE", Width: 17}, {Title: "PACKAGE", Width: 7}}
-	default:
-		usable := max(35, width-8)
-		return []table.Column{{Title: "APPLICATION", Width: max(18, usable-17)}, {Title: "STATE", Width: 17}}
+	if width >= 80 {
+		return []table.Column{{Title: "APPLICATION", Width: max(1, width-39)}, {Title: "GROUP", Width: 14}, {Title: "STATUS", Width: 17}}
 	}
+	return []table.Column{{Title: "APPLICATION", Width: max(1, width-25)}, {Title: "STATUS", Width: 17}}
 }
 
 func applicationRow(app ApplicationView, width int) table.Row {
-	name := app.App.Label()
-	validation := validationLabel(app.App)
-	build := buildLabel(app.Build.State)
-	packages := packageCount(len(app.App.Packages))
-	switch {
-	case width >= 110:
-		return table.Row{name, app.Group, validation, build, packages}
-	case width >= 80:
-		state := build
-		if app.App.Status != "valid" {
-			state = validation
-		}
-		return table.Row{name, app.Group, state, packages}
-	default:
-		state := build
-		if app.App.Status != "valid" {
-			state = validation
-		}
-		return table.Row{name, state}
+	status := buildLabel(app.Build.State)
+	if app.App.Status != "valid" {
+		status = validationLabel(app.App)
 	}
+	if width >= 80 {
+		return table.Row{app.App.Label(), app.Group, status}
+	}
+	return table.Row{app.App.Label(), status}
 }
 
 func (p applicationsPage) selected() (ApplicationView, bool) {
@@ -272,6 +240,8 @@ func buildLabel(state packager.BuildState) string {
 	switch state {
 	case packager.BuildStateCurrent:
 		return "✓ Up to date"
+	case packager.BuildStateNeedsVerification:
+		return "! Verify state"
 	case packager.BuildStateNeedsBuild:
 		return "• Needs build"
 	case packager.BuildStateNotBuilt:

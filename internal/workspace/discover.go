@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"github.com/LickABrick/inpakker/internal/config"
 	"os"
@@ -42,28 +43,11 @@ func (w *Workspace) Discover(names []string, all bool) (Selection, error) {
 		}
 	}
 	if all {
-		if _, err := os.Stat(appsRoot); os.IsNotExist(err) {
-			return selection, nil
-		}
-		err := filepath.Walk(appsRoot, func(current string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if !info.IsDir() {
-				return nil
-			}
-			if info.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			if current != filepath.Clean(appsRoot) && isFile(filepath.Join(current, "inpakker.app.json")) {
-				add(current)
-				return filepath.SkipDir
-			}
-			return nil
-		})
+		inventory, _, err := w.DiscoverWithGroups()
 		if err != nil {
-			return Selection{}, fmt.Errorf("scan applications directory: %w", err)
+			return Selection{}, err
 		}
+		selection.Apps = inventory.Apps
 	} else {
 		inventory, err := w.Discover(nil, true)
 		if err != nil {
@@ -150,11 +134,35 @@ func isFile(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// Groups discovers directories once per inventory load, stopping at application roots.
+// Groups discovers directories, stopping at application roots.
 func (w *Workspace) Groups() ([]string, error) {
+	_, groups, err := w.DiscoverWithGroups()
+	return groups, err
+}
+
+// DiscoverWithGroups returns applications and groups from one directory traversal.
+// Application contents and .git directories are never traversed.
+func (w *Workspace) DiscoverWithGroups() (Selection, []string, error) {
+	return w.DiscoverWithGroupsContext(context.Background())
+}
+
+func (w *Workspace) DiscoverWithGroupsContext(ctx context.Context) (Selection, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return Selection{}, nil, err
+	}
+	selection := Selection{}
 	groups := []string{}
-	err := filepath.WalkDir(w.AppsDir(), func(path string, entry os.DirEntry, err error) error {
-		if os.IsNotExist(err) && path == w.AppsDir() {
+	root := filepath.Clean(w.AppsDir())
+	if _, err := os.Stat(root); err == nil {
+		if err := pathutil.Within(w.Root, root); err != nil {
+			return Selection{}, nil, err
+		}
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
+		if os.IsNotExist(err) && path == root {
 			return nil
 		}
 		if err != nil {
@@ -163,16 +171,24 @@ func (w *Workspace) Groups() ([]string, error) {
 		if !entry.IsDir() {
 			return nil
 		}
-		if entry.Name() == ".git" || isFile(filepath.Join(path, AppConfigFile)) {
+		if entry.Name() == ".git" {
 			return filepath.SkipDir
 		}
-		if path != w.AppsDir() {
+		if path != root && isFile(filepath.Join(path, AppConfigFile)) {
+			selection.Apps = append(selection.Apps, AppRef{Path: path, Relative: w.Relative(path)})
+			return filepath.SkipDir
+		}
+		if path != root {
 			groups = append(groups, w.Relative(path))
 		}
 		return nil
 	})
+	if err != nil {
+		return Selection{}, nil, fmt.Errorf("scan applications directory: %w", err)
+	}
+	sort.Slice(selection.Apps, func(i, j int) bool { return selection.Apps[i].Relative < selection.Apps[j].Relative })
 	sort.Slice(groups, func(i, j int) bool { return naturalLess(groups[i], groups[j]) })
-	return groups, err
+	return selection, groups, nil
 }
 func naturalLess(a, b string) bool {
 	a, b = strings.ToLower(a), strings.ToLower(b)

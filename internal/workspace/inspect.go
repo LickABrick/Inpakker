@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -30,6 +31,11 @@ func (a App) Label() string {
 }
 
 func (w *Workspace) Inspect(ref AppRef) App {
+	return w.InspectContext(context.Background(), ref)
+}
+
+// InspectContext inspects one application with cancellable source validation.
+func (w *Workspace) InspectContext(ctx context.Context, ref AppRef) App {
 	app := App{Ref: ref, Status: "valid"}
 	cfg, err := config.LoadAppConfig(filepath.Join(ref.Path, "inpakker.app.json"))
 	if err != nil {
@@ -43,7 +49,7 @@ func (w *Workspace) Inspect(ref AppRef) App {
 	}
 	effective := w.Effective(*cfg)
 	app.Effective = &effective
-	if err := ValidateInput(ref.Path, &effective.AppConfig); err != nil {
+	if err := ValidateInputContext(ctx, ref.Path, &effective.AppConfig); err != nil {
 		app.Status, app.Error = "invalid", err.Error()
 	}
 	packages, packageErr := w.Packages(ref, cfg)
@@ -54,18 +60,38 @@ func (w *Workspace) Inspect(ref AppRef) App {
 }
 
 func (w *Workspace) List() ([]App, error) {
-	selection, err := w.Discover(nil, true)
+	apps, _, err := w.ListWithGroups(context.Background())
+	return apps, err
+}
+
+// ListWithGroups loads a single inventory snapshot. Cancellation discards the
+// partial snapshot so callers cannot accidentally replace a complete inventory.
+func (w *Workspace) ListWithGroups(ctx context.Context) ([]App, []string, error) {
+	selection, groups, err := w.DiscoverWithGroupsContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	apps := make([]App, 0, len(selection.Apps))
 	for _, ref := range selection.Apps {
-		apps = append(apps, w.Inspect(ref))
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		apps = append(apps, w.InspectContext(ctx, ref))
 	}
-	return apps, nil
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return apps, groups, nil
 }
 
 func ValidateInput(appPath string, cfg *types.AppConfig) error {
+	return ValidateInputContext(context.Background(), appPath, cfg)
+}
+
+func ValidateInputContext(ctx context.Context, appPath string, cfg *types.AppConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := config.ValidateApp(cfg); err != nil {
 		return err
 	}
@@ -91,6 +117,9 @@ func ValidateInput(appPath string, cfg *types.AppConfig) error {
 		return errors.New("setup file is a directory")
 	}
 	return filepath.WalkDir(sourcePath, func(path string, entry os.DirEntry, err error) error {
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
 		if err != nil {
 			return err
 		}

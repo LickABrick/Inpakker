@@ -10,6 +10,18 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// completeCreateDraft skips a redundant review for ordinary scaffolding. Copying
+// an external installer still requires explicit confirmation of source and target.
+func (m Model) completeCreateDraft(formCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.create.SetupFrom != "" {
+		m.showCreateReview()
+		return m, formCmd
+	}
+	m.form = nil
+	m.modal, m.modalTitle, m.modalBody, m.modalErr = ModalProgress, "Creating application", "Preparing application workspace…", nil
+	return m, tea.Sequence(formCmd, m.createCmd())
+}
+
 func (m *Model) showCreateReview() {
 	m.modal, m.modalTitle, m.form = ModalCreateReview, "Review application", nil
 	m.modalViewport.GotoTop()

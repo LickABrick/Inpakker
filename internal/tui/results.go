@@ -11,6 +11,8 @@ import (
 // rather than whichever application or workspace is selected later.
 type operationResult struct {
 	kind                 operationKind
+	status               resultStatus
+	counts               []resultCount
 	workspaceID, root    string
 	modal                ModalKind
 	title, body, summary string
@@ -29,8 +31,13 @@ func (m Model) rememberResult(updated tea.Model, cmd tea.Cmd) (tea.Model, tea.Cm
 		return n, cmd
 	}
 	op := m.operation
-	r := &operationResult{kind: op.kind, modal: n.modal, title: n.modalTitle, body: n.modalBody, err: n.modalErr,
+	modal := n.modal
+	if modal == ModalNone {
+		modal = ModalResults
+	}
+	r := &operationResult{kind: op.kind, status: n.notification.Status, modal: modal, title: n.modalTitle, body: n.modalBody, err: n.modalErr,
 		summary: n.resultTitle, rows: append([]resultRow(nil), n.resultRows...), options: op.buildOptions, packagePath: op.packagePath}
+	r.counts = append([]resultCount(nil), n.notification.Summary...)
 	if m.workspace != nil && op.kind != operationTool && op.kind != operationUpdate {
 		r.workspaceID, r.root = m.workspace.Config.ID, m.workspace.Root
 	}
@@ -45,12 +52,17 @@ func (m Model) rememberResult(updated tea.Model, cmd tea.Cmd) (tea.Model, tea.Cm
 	}
 	seen := make(map[string]bool)
 	for _, row := range r.rows {
-		if row.Failed && row.AppID != "" && !seen[row.AppID] {
+		if row.Outcome == resultFailed && row.AppID != "" && !seen[row.AppID] {
 			r.retryIDs = append(r.retryIDs, row.AppID)
 			seen[row.AppID] = true
 		}
 	}
-	n.lastResult, n.displayedResult = r, r
+	n.lastResult = r
+	if n.modal == ModalNone {
+		n.displayedResult = nil
+	} else {
+		n.displayedResult = r
+	}
 	return n, cmd
 }
 
@@ -65,8 +77,9 @@ func (m *Model) reopenResult() {
 		return
 	}
 	m.closeModal()
+	m.notification = Notification{Status: r.status, Summary: append([]resultCount(nil), r.counts...)}
 	m.modal, m.modalTitle, m.modalBody, m.modalErr = r.modal, r.title, r.body, r.err
-	m.resultRows, m.resultTitle, m.resultCursor = append([]resultRow(nil), r.rows...), r.summary, 0
+	m.resultRows, m.resultTitle, m.resultCursor = append([]resultRow(nil), r.rows...), r.summary, firstFailedRow(r.rows)
 	m.setLog(r.logTitle, r.log)
 	m.modalHasLog = r.log != ""
 	m.modalViewport.GotoTop()
@@ -129,6 +142,23 @@ func (m Model) retryFailed() (tea.Model, tea.Cmd) {
 		return m.unpackTargets(targets, r.packagePath == "", r.packagePath)
 	}
 	return m, nil
+}
+
+func firstFailedRow(rows []resultRow) int {
+	for i, row := range rows {
+		if row.Outcome == resultFailed {
+			return i
+		}
+	}
+	return 0
+}
+
+// operationTargets captures the original request before completion unlocks it.
+func (m Model) operationTargets(id int) []ApplicationView {
+	if m.operation == nil || m.operation.id != id {
+		return nil
+	}
+	return m.operation.targets
 }
 
 // resultAppID resolves against the current inventory before exposing navigation.

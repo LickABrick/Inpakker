@@ -148,8 +148,8 @@ func TestCreateFormSlugManualOverrideAndActualCreation(t *testing.T) {
 	msg := m.createCmd()()
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
-	if m.modalTitle != "Application created" {
-		t.Fatal(m.modalTitle, m.modalErr)
+	if m.modal != ModalNone || !strings.Contains(m.notification.Text, "created") {
+		t.Fatal("creation did not close the form with a success notification", m.modal, m.modalErr)
 	}
 	selected, ok := m.apps.selected()
 	if !ok || selected.App.Config.Name != "Mozilla Firefox ESR" {

@@ -36,7 +36,7 @@ Whether you maintain a handful of applications or separate app libraries for mul
   Inpakker uses Microsoft's official Win32 Content Prep Tool.
 
 * 🔍 **Inspect package state**
-  See at a glance which apps are valid, need a build or are already up to date.
+  See which apps need attention in a status-first list. Browse with lightweight metadata checks; builds still verify file contents before skipping unchanged applications.
 
 * 📂 **Jump straight into folders**
   Open workspaces, applications and package output directly from the TUI.
