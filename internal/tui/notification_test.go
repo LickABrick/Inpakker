@@ -19,9 +19,14 @@ func TestQuietSuccessRetainsInspectableLastResult(t *testing.T) {
 				results: []packager.Result{{App: app.App, Status: packager.StatusCurrent}},
 			}))
 			m = updated.(Model)
-			if m.modal != ModalNone || m.lastResult == nil || m.lastResult.status != resultSuccess {
+			if m.modal != ModalNone || m.displayedResult != nil || m.lastResult == nil || m.lastResult.status != resultSuccess {
 				t.Fatalf("quiet result: modal=%v result=%#v", m.modal, m.lastResult)
 			}
+			m.beginActions()
+			if m.actionAppID != app.App.Ref.Relative {
+				t.Fatal("quiet result replaced the page's application actions")
+			}
+			m.closeModal()
 			m.reopenResult()
 			if m.modal != ModalResults || len(m.resultRows) != 1 || m.logText != "tool output" {
 				t.Fatalf("reopened result: modal=%v rows=%d log=%q", m.modal, len(m.resultRows), m.logText)

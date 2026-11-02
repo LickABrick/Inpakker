@@ -57,7 +57,12 @@ func (m Model) rememberResult(updated tea.Model, cmd tea.Cmd) (tea.Model, tea.Cm
 			seen[row.AppID] = true
 		}
 	}
-	n.lastResult, n.displayedResult = r, r
+	n.lastResult = r
+	if n.modal == ModalNone {
+		n.displayedResult = nil
+	} else {
+		n.displayedResult = r
+	}
 	return n, cmd
 }
 

@@ -96,7 +96,15 @@ func TestResultActionMenuReturnsToSameResult(t *testing.T) {
 	op.targets = []ApplicationView{app}
 	updated, _ := m.Update(buildDoneMsg{id: op.id, all: true, apps: m.apps.all, log: "diagnostic log", results: []packager.Result{{App: app.App, Status: packager.StatusBuilt}}})
 	m = updated.(Model)
+	if m.modal != ModalNone || m.displayedResult != nil {
+		t.Fatal("successful build should leave the page active")
+	}
+	updated, _ = m.Update(press("L"))
+	m = updated.(Model)
 	result := m.displayedResult
+	if m.modal != ModalResults || result == nil {
+		t.Fatal("Last Result did not reopen the successful build")
+	}
 	updated, _ = m.Update(press("a"))
 	m = updated.(Model)
 	for _, action := range m.actions {

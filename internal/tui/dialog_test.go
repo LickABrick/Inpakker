@@ -134,6 +134,14 @@ func TestBuildLogReturnsToResultAndDoesNotLeakIntoOtherDialogs(t *testing.T) {
 		op := m.startOperation(operationBuild, "Building", 1)
 		updated, _ := m.Update(buildDoneMsg{id: op.id, all: all, log: strings.Repeat("[INFO] Tool output\n", 80), results: []packager.Result{{App: m.apps.all[0].App, Status: packager.StatusBuilt}}})
 		m = updated.(Model)
+		if m.modal != ModalNone {
+			t.Fatal("successful build should not open a dialog")
+		}
+		updated, _ = m.Update(press("L"))
+		m = updated.(Model)
+		if m.modal != ModalResults {
+			t.Fatal("Last Result did not reopen build results")
+		}
 		resultModal, resultTitle := m.modal, m.modalTitle
 		updated, _ = m.Update(press("l"))
 		m = updated.(Model)

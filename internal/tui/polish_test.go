@@ -74,6 +74,13 @@ func TestOperationResultEnterUsesResultTarget(t *testing.T) {
 				}
 				next, _ := m.Update(msg)
 				m = next.(Model)
+				if m.modal != ModalNone || m.lastResult == nil {
+					t.Fatal("successful operation should retain a quiet result")
+				}
+				m = sendKey(m, press("L"))
+				if m.modal != ModalResults {
+					t.Fatal("Last Result did not reopen operation results")
+				}
 				m.apps.table.SetCursor(0)
 				if !strings.Contains(m.bindingHelp(m.effectiveBindings()), "open application") {
 					t.Fatal("help omits result primary action")
